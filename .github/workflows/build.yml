@@ -88,6 +88,7 @@ jobs:
               implementation 'androidx.media3:media3-exoplayer-hls:1.4.1'
               implementation 'androidx.media3:media3-ui:1.4.1'
               implementation 'com.github.bumptech.glide:glide:4.16.0'
+              implementation 'androidx.recyclerview:recyclerview:1.3.2'
           }
           EOF
 
@@ -138,6 +139,7 @@ jobs:
                   <activity android:name=".LoginActivity" android:exported="false"
                       android:windowSoftInputMode="adjustResize" />
                   <activity android:name=".SettingsActivity" android:exported="false" />
+                  <activity android:name=".SeriesActivity" android:exported="false" />
                   <receiver android:name=".BootReceiver" android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -224,6 +226,9 @@ jobs:
               public String seriesId;
               public String logo;
               public String streamId;
+              public String season;
+              public String episode;
+              public String epTitle;
               public long added;
           }
           EOF
@@ -475,6 +480,281 @@ jobs:
                   int base = 0x1F1E6;
                   return new String(Character.toChars(base + cc.charAt(0) - 'A'))
                           + new String(Character.toChars(base + cc.charAt(1) - 'A'));
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Home.java <<'EOF'
+          package com.my.iptv;
+
+          import android.content.Context;
+          import android.graphics.drawable.ColorDrawable;
+          import android.graphics.drawable.GradientDrawable;
+          import android.graphics.drawable.StateListDrawable;
+          import android.text.TextUtils;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.FrameLayout;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
+          import android.widget.TextView;
+
+          import androidx.recyclerview.widget.LinearLayoutManager;
+          import androidx.recyclerview.widget.RecyclerView;
+
+          import com.bumptech.glide.Glide;
+
+          import java.util.List;
+
+          // واجهة الأفلام والمسلسلات: صفوف بوسترات أفقية
+          public class Home {
+              public static class Row {
+                  public final String title;
+                  public final String key;
+                  public final List<Channel> items;
+                  public final boolean big;
+                  public final boolean cw;
+
+                  public Row(String title, String key, List<Channel> items, boolean big, boolean cw) {
+                      this.title = title;
+                      this.key = key;
+                      this.items = items;
+                      this.big = big;
+                      this.cw = cw;
+                  }
+              }
+
+              public interface Listener {
+                  void onCard(Row row, int pos);
+
+                  void onCardLong(Row row, int pos);
+              }
+
+              // ---------- الصفوف ----------
+              public static class RowsAdapter extends RecyclerView.Adapter<RowsAdapter.VH> {
+                  final Context ctx;
+                  final List<Row> rows;
+                  final Listener listener;
+                  final int section;
+                  final RecyclerView.RecycledViewPool pool = new RecyclerView.RecycledViewPool();
+
+                  public RowsAdapter(Context ctx, List<Row> rows, int section, Listener listener) {
+                      this.ctx = ctx;
+                      this.rows = rows;
+                      this.section = section;
+                      this.listener = listener;
+                  }
+
+                  static class VH extends RecyclerView.ViewHolder {
+                      final TextView title;
+                      final RecyclerView rv;
+
+                      VH(View v, TextView t, RecyclerView r) {
+                          super(v);
+                          title = t;
+                          rv = r;
+                      }
+                  }
+
+                  @Override
+                  public VH onCreateViewHolder(ViewGroup parent, int type) {
+                      LinearLayout box = new LinearLayout(ctx);
+                      box.setOrientation(LinearLayout.VERTICAL);
+                      box.setClipChildren(false);
+                      box.setClipToPadding(false);
+                      box.setLayoutParams(new RecyclerView.LayoutParams(
+                              RecyclerView.LayoutParams.MATCH_PARENT, RecyclerView.LayoutParams.WRAP_CONTENT));
+                      TextView title = Ui.text(ctx, "", 21, Ui.TEXT, Ui.BOLD);
+                      title.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 14), Ui.dp(ctx, 16), 0);
+                      box.addView(title);
+                      RecyclerView rv = new RecyclerView(ctx);
+                      rv.setLayoutManager(new LinearLayoutManager(ctx, LinearLayoutManager.HORIZONTAL, false));
+                      rv.setRecycledViewPool(pool);
+                      rv.setClipChildren(false);
+                      rv.setClipToPadding(false);
+                      rv.setItemAnimator(null);
+                      rv.setPadding(Ui.dp(ctx, 12), Ui.dp(ctx, 14), Ui.dp(ctx, 12), Ui.dp(ctx, 14));
+                      box.addView(rv, new LinearLayout.LayoutParams(
+                              LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                      return new VH(box, title, rv);
+                  }
+
+                  @Override
+                  public void onBindViewHolder(VH h, int pos) {
+                      Row r = rows.get(pos);
+                      h.title.setText(r.title);
+                      h.rv.setAdapter(new CardsAdapter(ctx, r, section, listener));
+                  }
+
+                  @Override
+                  public int getItemCount() {
+                      return rows.size();
+                  }
+              }
+
+              // ---------- البوسترات ----------
+              public static class CardsAdapter extends RecyclerView.Adapter<CardsAdapter.VH> {
+                  final Context ctx;
+                  final Row row;
+                  final int section;
+                  final Listener listener;
+                  final long newSince = System.currentTimeMillis() / 1000 - 7 * 24 * 3600;
+
+                  CardsAdapter(Context ctx, Row row, int section, Listener listener) {
+                      this.ctx = ctx;
+                      this.row = row;
+                      this.section = section;
+                      this.listener = listener;
+                  }
+
+                  static class VH extends RecyclerView.ViewHolder {
+                      FrameLayout card;
+                      ImageView img;
+                      TextView emoji, badge, label, play, title;
+                      View shade;
+                      ProgressBar prog;
+
+                      VH(View v) {
+                          super(v);
+                      }
+                  }
+
+                  @Override
+                  public int getItemViewType(int position) {
+                      return row.big ? 1 : 0;
+                  }
+
+                  @Override
+                  public VH onCreateViewHolder(ViewGroup parent, int type) {
+                      boolean big = type == 1;
+                      int w = Ui.dp(ctx, big ? 210 : 150);
+                      int hgt = Ui.dp(ctx, big ? 315 : 225);
+
+                      LinearLayout root = new LinearLayout(ctx);
+                      root.setOrientation(LinearLayout.VERTICAL);
+                      root.setClipChildren(false);
+                      RecyclerView.LayoutParams rlp = new RecyclerView.LayoutParams(w + Ui.dp(ctx, 16), RecyclerView.LayoutParams.WRAP_CONTENT);
+                      root.setLayoutParams(rlp);
+                      root.setPadding(Ui.dp(ctx, 8), 0, Ui.dp(ctx, 8), 0);
+
+                      VH h = new VH(root);
+                      h.card = new FrameLayout(ctx);
+                      h.card.setBackground(Ui.round(ctx, Ui.CARD, 14));
+                      h.card.setClipToOutline(true);
+                      StateListDrawable fg = new StateListDrawable();
+                      fg.addState(new int[]{android.R.attr.state_focused}, Ui.stroke(ctx, 0x00000000, 14, Ui.ACCENT2, 3));
+                      fg.addState(new int[]{}, new ColorDrawable(0x00000000));
+                      h.card.setForeground(fg);
+                      h.card.setFocusable(true);
+                      h.card.setClickable(true);
+                      h.card.setLongClickable(true);
+
+                      h.emoji = Ui.text(ctx, section == Data.SERIES ? "🎞️" : "🎬", 40, Ui.TEXT, null);
+                      h.emoji.setGravity(Gravity.CENTER);
+                      h.card.addView(h.emoji, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                      h.img = new ImageView(ctx);
+                      h.img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                      h.card.addView(h.img, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+                      h.shade = new View(ctx);
+                      h.shade.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                              new int[]{0xE6000000, 0x00000000}));
+                      h.card.addView(h.shade, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, hgt / 3, Gravity.BOTTOM));
+
+                      h.play = Ui.text(ctx, "▶", 22, Ui.TEXT, null);
+                      h.play.setGravity(Gravity.CENTER);
+                      h.play.setBackground(Ui.stroke(ctx, 0x66000000, 30, 0xCCFFFFFF, 2));
+                      h.card.addView(h.play, new FrameLayout.LayoutParams(Ui.dp(ctx, 56), Ui.dp(ctx, 56), Gravity.CENTER));
+
+                      h.badge = Ui.text(ctx, "جديد", 12, Ui.TEXT, Ui.BOLD);
+                      h.badge.setBackground(Ui.round(ctx, Ui.LIVE, 6));
+                      h.badge.setPadding(Ui.dp(ctx, 8), Ui.dp(ctx, 2), Ui.dp(ctx, 8), Ui.dp(ctx, 2));
+                      FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.END);
+                      blp.setMargins(0, Ui.dp(ctx, 8), Ui.dp(ctx, 8), 0);
+                      h.card.addView(h.badge, blp);
+
+                      h.label = Ui.text(ctx, "", 13, Ui.TEXT, Ui.BOLD);
+                      h.label.setSingleLine(true);
+                      h.label.setEllipsize(TextUtils.TruncateAt.END);
+                      FrameLayout.LayoutParams llp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+                      llp.setMargins(Ui.dp(ctx, 10), 0, Ui.dp(ctx, 10), Ui.dp(ctx, 12));
+                      h.card.addView(h.label, llp);
+
+                      h.prog = Ui.progress(ctx);
+                      FrameLayout.LayoutParams plp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, Ui.dp(ctx, 4), Gravity.BOTTOM);
+                      h.card.addView(h.prog, plp);
+
+                      root.addView(h.card, new LinearLayout.LayoutParams(w, hgt));
+
+                      h.title = Ui.text(ctx, "", 14, Ui.SUB, Ui.MEDIUM);
+                      h.title.setSingleLine(true);
+                      h.title.setEllipsize(TextUtils.TruncateAt.END);
+                      h.title.setGravity(Gravity.CENTER);
+                      h.title.setPadding(0, Ui.dp(ctx, 8), 0, 0);
+                      root.addView(h.title, new LinearLayout.LayoutParams(w, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                      final VH fh = h;
+                      h.card.setOnFocusChangeListener((v, has) -> {
+                          v.animate().scaleX(has ? 1.1f : 1f).scaleY(has ? 1.1f : 1f).setDuration(150).start();
+                          v.setElevation(has ? Ui.dp(ctx, 12) : 0);
+                          fh.title.setTextColor(has ? Ui.TEXT : Ui.SUB);
+                      });
+                      h.card.setOnClickListener(v -> {
+                          int p = fh.getBindingAdapterPosition();
+                          if (p != RecyclerView.NO_POSITION) listener.onCard(row, p);
+                      });
+                      h.card.setOnLongClickListener(v -> {
+                          int p = fh.getBindingAdapterPosition();
+                          if (p != RecyclerView.NO_POSITION) listener.onCardLong(row, p);
+                          return true;
+                      });
+                      return h;
+                  }
+
+                  @Override
+                  public void onBindViewHolder(VH h, int pos) {
+                      Channel ch = row.items.get(pos);
+                      if (ch.logo != null && !ch.logo.isEmpty()) {
+                          h.img.setVisibility(View.VISIBLE);
+                          Glide.with(ctx).load(ch.logo).centerCrop().into(h.img);
+                      } else {
+                          Glide.with(ctx).clear(h.img);
+                          h.img.setImageDrawable(null);
+                          h.img.setVisibility(View.GONE);
+                      }
+                      boolean seriesCw = row.cw && section == Data.SERIES;
+                      h.title.setText(seriesCw && ch.group != null ? ch.group : ch.name);
+                      h.badge.setVisibility(!row.cw && ch.added > newSince ? View.VISIBLE : View.GONE);
+                      h.play.setVisibility(row.cw ? View.VISIBLE : View.GONE);
+                      if (row.cw) {
+                          String lbl = "";
+                          if (seriesCw) {
+                              lbl = ch.season != null && ch.episode != null
+                                      ? "م" + ch.season + "  ح" + ch.episode : ch.name;
+                          }
+                          h.label.setText(lbl);
+                          long p = Store.getPos(ctx, ch.url);
+                          long d = Store.getDur(ctx, ch.url);
+                          if (d > 0 && p > 0) {
+                              h.prog.setVisibility(View.VISIBLE);
+                              h.prog.setProgress((int) Math.min(100, p * 100 / d));
+                          } else {
+                              h.prog.setVisibility(View.GONE);
+                          }
+                          h.shade.setVisibility(View.VISIBLE);
+                      } else {
+                          h.label.setText("");
+                          h.prog.setVisibility(View.GONE);
+                          h.shade.setVisibility(View.GONE);
+                      }
+                  }
+
+                  @Override
+                  public int getItemCount() {
+                      return row.items.size();
+                  }
               }
           }
           EOF
@@ -967,6 +1247,9 @@ jobs:
                       if (ext.isEmpty() || ext.equals("null")) ext = "mp4";
                       ch.url = c[0] + "/series/" + c[1] + "/" + c[2] + "/" + e.optString("id") + "." + ext;
                       ch.seriesId = seriesId;
+                      ch.season = season.isEmpty() ? "1" : season;
+                      ch.episode = number;
+                      ch.epTitle = title;
                       list.add(ch);
                   }
                   if (list.isEmpty()) throw new Exception("ما فيه حلقات لهالمسلسل");
@@ -1125,6 +1408,8 @@ jobs:
           import androidx.media3.common.Player;
           import androidx.media3.exoplayer.ExoPlayer;
           import androidx.media3.ui.PlayerView;
+          import androidx.recyclerview.widget.LinearLayoutManager;
+          import androidx.recyclerview.widget.RecyclerView;
 
           import com.bumptech.glide.Glide;
           import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
@@ -1141,7 +1426,7 @@ jobs:
           import java.util.Map;
           import java.util.Set;
 
-          public class MainActivity extends Activity {
+          public class MainActivity extends Activity implements Home.Listener {
               static final String[] TAB_NAMES = {"القنوات", "الأفلام", "المسلسلات"};
               static final String[] TAB_EMOJI = {"📺", "🎬", "🎞️"};
               static final String KEY_ALL = "\u0000all";
@@ -1169,6 +1454,12 @@ jobs:
               TextView pvEmoji, pvTitle, pvSub, pvEpg;
               final TextView[] tabs = new TextView[3];
               TextView clock, liveBadge;
+              LinearLayout liveBody;
+              RecyclerView home;
+              Home.RowsAdapter homeAdapter;
+              final List<Home.Row> homeRows = new ArrayList<>();
+              String focusRowKey = null;
+              int focusRow = 0, focusCard = 0;
               LinearLayout pvEpgBox;
               ProgressBar pvProgress;
 
@@ -1364,6 +1655,17 @@ jobs:
                   body.addView(right, rp);
 
                   root.addView(body, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+                  liveBody = body;
+
+                  // واجهة الأفلام والمسلسلات (صفوف بوسترات)
+                  home = new RecyclerView(this);
+                  home.setLayoutManager(new LinearLayoutManager(this));
+                  home.setClipChildren(false);
+                  home.setClipToPadding(false);
+                  home.setItemAnimator(null);
+                  home.setPadding(0, 0, 0, dp(40));
+                  home.setVisibility(View.GONE);
+                  root.addView(home, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
                   adapter = new IconAdapter(this, rows);
                   list.setAdapter(adapter);
@@ -1467,6 +1769,11 @@ jobs:
                   backBtn.setVisibility(View.GONE);
                   level = LV_GROUPS;
                   setPreview(null, TAB_EMOJI[sec], TAB_NAMES[sec], "");
+                  liveBody.setVisibility(sec == Data.LIVE ? View.VISIBLE : View.GONE);
+                  home.setVisibility(sec == Data.LIVE ? View.GONE : View.VISIBLE);
+                  homeRows.clear();
+                  homeAdapter = new Home.RowsAdapter(this, homeRows, sec, this);
+                  home.setAdapter(homeAdapter);
                   if (Data.loaded[sec]) onDataReady();
                   else load(sec);
               }
@@ -1531,6 +1838,11 @@ jobs:
 
               void onDataReady() {
                   refreshVisible();
+                  if (section != Data.LIVE) {
+                      buildHome();
+                      home.post(() -> home.requestFocus());
+                      return;
+                  }
                   rebuildGroupKeys();
                   String def;
                   if (section == Data.LIVE) def = favKeys.isEmpty() ? KEY_ALL : KEY_FAV;
@@ -1948,6 +2260,10 @@ jobs:
 
               void runSearch() {
                   if (!Data.loaded[section]) return;
+                  if (section != Data.LIVE) {
+                      buildHome();
+                      return;
+                  }
                   String q = norm(query());
                   if (q.isEmpty()) {
                       if (searchMode) showGroups();
@@ -1969,6 +2285,185 @@ jobs:
                   searchMode = true;
                   currentKey = KEY_ALL;
                   showItems(LV_ITEMS, "نتائج البحث", false);
+              }
+
+              // ---------- واجهة الأفلام والمسلسلات ----------
+
+              void buildHome() {
+                  homeRows.clear();
+                  String q = norm(query());
+                  String unit = section == Data.MOVIES ? " فيلم" : " مسلسل";
+                  if (!q.isEmpty()) {
+                      String[] words = q.split("\\s+");
+                      List<Channel> res = new ArrayList<>();
+                      for (Channel ch : visible) {
+                          String n = norm(ch.name);
+                          boolean ok = true;
+                          for (String w : words) {
+                              if (!n.contains(w)) {
+                                  ok = false;
+                                  break;
+                              }
+                          }
+                          if (ok) res.add(ch);
+                          if (res.size() >= 300) break;
+                      }
+                      homeRows.add(new Home.Row("🔍  نتائج البحث (" + res.size() + ")", KEY_ALL, res, false, false));
+                      homeAdapter.notifyDataSetChanged();
+                      status.setText("نتائج البحث: " + res.size() + "  •  زر الرجوع يلغي البحث");
+                      return;
+                  }
+                  List<Channel> newest = new ArrayList<>(visible);
+                  Collections.sort(newest, (a, b) -> Long.compare(b.added, a.added));
+                  int featured = Math.min(12, newest.size());
+                  if (featured > 0) homeRows.add(new Home.Row("✨  مميز", KEY_NEW, new ArrayList<>(newest.subList(0, featured)), true, false));
+                  List<Channel> cw = new ArrayList<>();
+                  for (Channel c : Store.cw(this, section)) {
+                      if (section == Data.MOVIES) {
+                          Channel cur = byKey.get(Store.keyOf(c));
+                          cw.add(cur != null ? cur : c);
+                      } else {
+                          cw.add(c);
+                      }
+                  }
+                  if (!cw.isEmpty()) homeRows.add(new Home.Row("▶️  أكمل المشاهدة", KEY_CW, cw, false, true));
+                  List<Channel> favs = itemsFor(KEY_FAV);
+                  if (!favs.isEmpty()) homeRows.add(new Home.Row("⭐  المفضلة", KEY_FAV, favs, false, false));
+                  if (newest.size() > featured) {
+                      homeRows.add(new Home.Row("🆕  الأحدث", KEY_NEW,
+                              new ArrayList<>(newest.subList(featured, Math.min(featured + 60, newest.size()))), false, false));
+                  }
+                  Map<String, List<Channel>> byGroup = new HashMap<>();
+                  for (Channel ch : visible) {
+                      List<Channel> l = byGroup.get(ch.group);
+                      if (l == null) {
+                          l = new ArrayList<>();
+                          byGroup.put(ch.group, l);
+                      }
+                      l.add(ch);
+                  }
+                  Set<String> hid = Store.hidden(this, section);
+                  for (String g : Data.groups.get(section)) {
+                      if (hid.contains(g)) continue;
+                      List<Channel> l = byGroup.get(g);
+                      if (l == null || l.isEmpty()) continue;
+                      String flag = Flags.find(g);
+                      homeRows.add(new Home.Row((flag == null ? "" : flag + "  ") + g + "   (" + l.size() + ")", g, l, false, false));
+                  }
+                  homeAdapter.notifyDataSetChanged();
+                  status.setText(TAB_NAMES[section] + "  •  " + visible.size() + unit + "  •  ضغطة طويلة على أي بوستر للخيارات");
+              }
+
+              static String rowId(Home.Row r) {
+                  return r.key + "|" + r.big + "|" + r.cw;
+              }
+
+              // نحفظ البوستر اللي واقف عليه عشان نرجع له بعدين
+              void rememberFocus() {
+                  focusRowKey = null;
+                  View f = getCurrentFocus();
+                  if (f == null || home == null) return;
+                  View v = f;
+                  RecyclerView inner = null;
+                  View cardRoot = null;
+                  while (v != null && v.getParent() instanceof View) {
+                      View parent = (View) v.getParent();
+                      if (parent instanceof RecyclerView && parent != home) {
+                          inner = (RecyclerView) parent;
+                          cardRoot = v;
+                      }
+                      if (parent == home) {
+                          int ri = home.getChildAdapterPosition(v);
+                          if (ri >= 0 && ri < homeRows.size() && inner != null) {
+                              focusRowKey = rowId(homeRows.get(ri));
+                              focusRow = ri;
+                              focusCard = Math.max(0, inner.getChildAdapterPosition(cardRoot));
+                          }
+                          return;
+                      }
+                      v = parent;
+                  }
+              }
+
+              void restoreFocus() {
+                  if (focusRowKey == null || homeRows.isEmpty()) return;
+                  int ri = -1;
+                  for (int i = 0; i < homeRows.size(); i++) {
+                      if (rowId(homeRows.get(i)).equals(focusRowKey)) {
+                          ri = i;
+                          break;
+                      }
+                  }
+                  if (ri < 0) ri = Math.min(focusRow, homeRows.size() - 1);
+                  final int row = ri;
+                  final int card = Math.max(0, Math.min(focusCard, homeRows.get(ri).items.size() - 1));
+                  home.scrollToPosition(row);
+                  home.post(() -> {
+                      RecyclerView.ViewHolder vh = home.findViewHolderForAdapterPosition(row);
+                      if (!(vh instanceof Home.RowsAdapter.VH)) return;
+                      final RecyclerView inner = ((Home.RowsAdapter.VH) vh).rv;
+                      inner.scrollToPosition(card);
+                      inner.post(() -> {
+                          RecyclerView.ViewHolder c = inner.findViewHolderForAdapterPosition(card);
+                          if (c != null && c.itemView instanceof LinearLayout) {
+                              ((LinearLayout) c.itemView).getChildAt(0).requestFocus();
+                          }
+                      });
+                  });
+              }
+
+              @Override
+              public void onCard(Home.Row row, int pos) {
+                  if (pos < 0 || pos >= row.items.size()) return;
+                  Channel ch = row.items.get(pos);
+                  if (section == Data.MOVIES) {
+                      play(row.items, pos, true, false);
+                  } else if (row.cw) {
+                      playEpisodeFromCw(ch);
+                  } else {
+                      SeriesActivity.series = ch;
+                      startActivity(new Intent(this, SeriesActivity.class));
+                  }
+              }
+
+              @Override
+              public void onCardLong(final Home.Row row, final int pos) {
+                  if (pos < 0 || pos >= row.items.size()) return;
+                  final Channel ch = row.items.get(pos);
+                  List<String> opts = new ArrayList<>();
+                  final List<Runnable> acts = new ArrayList<>();
+                  if (row.cw) {
+                      opts.add("✖  إزالة من «أكمل المشاهدة»");
+                      acts.add(() -> {
+                          Store.removeCw(this, section, ch.url);
+                          Store.setPos(this, ch.url, 0);
+                      });
+                  } else {
+                      boolean fav = favKeys.contains(Store.keyOf(ch));
+                      opts.add(fav ? "✖  إزالة من المفضلة" : "⭐  إضافة للمفضلة");
+                      acts.add(() -> {
+                          if (fav) Store.removeFav(this, section, ch);
+                          else Store.addFav(this, section, ch);
+                          toast(fav ? "انشالت من المفضلة" : "انضافت للمفضلة");
+                      });
+                      if (ch.group != null && !Loader.NO_GROUP.equals(ch.group)) {
+                          opts.add("🙈  إخفاء قسم «" + ch.group + "»");
+                          acts.add(() -> {
+                              Store.setHidden(this, section, ch.group, true);
+                              toast("انخفى القسم — ترجعه من الإعدادات");
+                          });
+                      }
+                  }
+                  new AlertDialog.Builder(this)
+                          .setTitle(ch.name)
+                          .setItems(opts.toArray(new String[0]), (d, w) -> {
+                              rememberFocus();
+                              acts.get(w).run();
+                              refreshVisible();
+                              buildHome();
+                              restoreFocus();
+                          })
+                          .show();
               }
 
               // ---------- الضغطة الطويلة ----------
@@ -2081,6 +2576,7 @@ jobs:
               @Override
               protected void onPause() {
                   super.onPause();
+                  if (section != Data.LIVE) rememberFocus();
                   ui.removeCallbacks(clockRun);
               }
 
@@ -2093,6 +2589,11 @@ jobs:
                   }
                   if (adapter == null || !Data.loaded[section]) return;
                   refreshVisible();
+                  if (section != Data.LIVE) {
+                      buildHome();
+                      restoreFocus();
+                      return;
+                  }
                   rebuildGroupKeys();
                   if (level == LV_GROUPS) {
                       showGroups();
@@ -2133,6 +2634,19 @@ jobs:
 
               @Override
               public void onBackPressed() {
+                  if (section != Data.LIVE) {
+                      if (!query().isEmpty()) {
+                          search.setText("");
+                          home.requestFocus();
+                          return;
+                      }
+                      if (getCurrentFocus() instanceof EditText) {
+                          home.requestFocus();
+                          return;
+                      }
+                      super.onBackPressed();
+                      return;
+                  }
                   if (getCurrentFocus() instanceof EditText && level == LV_GROUPS) {
                       list.requestFocus();
                       return;
@@ -2378,6 +2892,7 @@ jobs:
                   long d = player.getDuration();
                   long p = player.getCurrentPosition();
                   Channel c = current();
+                  Store.setDur(this, c.url, d);
                   if (d > 0 && p > d * 0.95) {
                       Store.setPos(this, c.url, 0);
                       Store.removeCw(this, section, c.url);
@@ -2658,6 +3173,236 @@ jobs:
           }
           EOF
 
+          cat > app/src/main/java/com/my/iptv/SeriesActivity.java <<'EOF'
+          package com.my.iptv;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.os.Bundle;
+          import android.os.Handler;
+          import android.os.Looper;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.FrameLayout;
+          import android.widget.HorizontalScrollView;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ListView;
+          import android.widget.TextView;
+
+          import com.bumptech.glide.Glide;
+
+          import java.util.ArrayList;
+          import java.util.List;
+
+          // صفحة المسلسل: البوستر، المواسم، الحلقات
+          public class SeriesActivity extends Activity {
+              static Channel series;
+
+              final List<Channel> all = new ArrayList<>();
+              final List<String> seasons = new ArrayList<>();
+              final List<Channel> shown = new ArrayList<>();
+              final List<IconAdapter.Row> rows = new ArrayList<>();
+              final List<TextView> seasonChips = new ArrayList<>();
+              IconAdapter adapter;
+              ListView list;
+              LinearLayout seasonBar;
+              TextView status, favBtn;
+              String curSeason = null;
+              final Handler ui = new Handler(Looper.getMainLooper());
+
+              int dp(int v) {
+                  return Ui.dp(this, v);
+              }
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  if (series == null) {
+                      finish();
+                      return;
+                  }
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.HORIZONTAL);
+                  root.setBackground(Ui.background());
+                  root.setPadding(dp(48), dp(36), dp(48), dp(36));
+
+                  // البوستر
+                  FrameLayout poster = new FrameLayout(this);
+                  poster.setBackground(Ui.round(this, Ui.CARD, 20));
+                  poster.setClipToOutline(true);
+                  ImageView img = new ImageView(this);
+                  img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                  poster.addView(img, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  if (series.logo != null && !series.logo.isEmpty()) Glide.with(this).load(series.logo).centerCrop().into(img);
+                  root.addView(poster, new LinearLayout.LayoutParams(dp(300), dp(450)));
+
+                  // التفاصيل
+                  LinearLayout col = new LinearLayout(this);
+                  col.setOrientation(LinearLayout.VERTICAL);
+                  col.setPadding(dp(36), 0, 0, 0);
+                  TextView title = Ui.text(this, series.name, 34, Ui.TEXT, Ui.BOLD);
+                  title.setSingleLine(true);
+                  col.addView(title);
+                  col.addView(Ui.text(this, series.group == null ? "" : series.group, 18, Ui.SUB, Ui.MEDIUM));
+
+                  LinearLayout actions = new LinearLayout(this);
+                  actions.setOrientation(LinearLayout.HORIZONTAL);
+                  actions.setPadding(0, dp(18), 0, dp(10));
+                  favBtn = Ui.chip(this, "");
+                  favBtn.setOnClickListener(v -> toggleFav());
+                  actions.addView(favBtn);
+                  col.addView(actions);
+                  updateFavBtn();
+
+                  HorizontalScrollView hs = new HorizontalScrollView(this);
+                  hs.setHorizontalScrollBarEnabled(false);
+                  hs.setClipChildren(false);
+                  seasonBar = new LinearLayout(this);
+                  seasonBar.setOrientation(LinearLayout.HORIZONTAL);
+                  seasonBar.setPadding(dp(4), dp(8), dp(4), dp(8));
+                  seasonBar.setClipChildren(false);
+                  hs.addView(seasonBar);
+                  col.addView(hs);
+
+                  status = Ui.text(this, "جاري تحميل الحلقات...", 16, Ui.SUB, Ui.MEDIUM);
+                  status.setPadding(dp(4), dp(8), dp(4), dp(8));
+                  col.addView(status);
+
+                  list = new ListView(this);
+                  list.setSelector(Ui.selector(this));
+                  list.setDivider(null);
+                  list.setDividerHeight(0);
+                  list.setVerticalScrollBarEnabled(false);
+                  list.setBackground(Ui.round(this, Ui.GLASS, 20));
+                  list.setPadding(dp(8), dp(8), dp(8), dp(8));
+                  list.setClipToPadding(false);
+                  adapter = new IconAdapter(this, rows);
+                  list.setAdapter(adapter);
+                  list.setOnItemClickListener((a, v, pos, id) -> playEpisode(pos));
+                  col.addView(list, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+
+                  root.addView(col, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1));
+                  setContentView(root);
+                  load();
+              }
+
+              void updateFavBtn() {
+                  boolean fav = false;
+                  String k = Store.keyOf(series);
+                  for (Channel f : Store.favs(this, Data.SERIES)) if (Store.keyOf(f).equals(k)) fav = true;
+                  favBtn.setText(fav ? "✓  في المفضلة" : "⭐  إضافة للمفضلة");
+                  favBtn.setTag(fav);
+              }
+
+              void toggleFav() {
+                  if (Boolean.TRUE.equals(favBtn.getTag())) Store.removeFav(this, Data.SERIES, series);
+                  else Store.addFav(this, Data.SERIES, series);
+                  updateFavBtn();
+              }
+
+              void load() {
+                  final Account acc = Account.read(this);
+                  final Channel s = series;
+                  new Thread(() -> {
+                      try {
+                          final List<Channel> eps = Loader.loadEpisodes(acc, s.seriesId);
+                          ui.post(() -> onLoaded(eps));
+                      } catch (Exception e) {
+                          final String msg = e.getMessage();
+                          ui.post(() -> status.setText("تعذر تحميل الحلقات: " + msg));
+                      }
+                  }).start();
+              }
+
+              void onLoaded(List<Channel> eps) {
+                  all.clear();
+                  seasons.clear();
+                  for (Channel e : eps) {
+                      e.group = series.name;
+                      if (e.logo == null || e.logo.isEmpty()) e.logo = series.logo;
+                      if (e.season == null) e.season = "1";
+                      if (!seasons.contains(e.season)) seasons.add(e.season);
+                      all.add(e);
+                  }
+                  // نفتح على الموسم اللي كنت توقفت فيه
+                  String start = seasons.isEmpty() ? null : seasons.get(0);
+                  for (Channel c : Store.cw(this, Data.SERIES)) {
+                      if (series.seriesId != null && series.seriesId.equals(c.seriesId) && c.season != null && seasons.contains(c.season)) {
+                          start = c.season;
+                          break;
+                      }
+                  }
+                  seasonBar.removeAllViews();
+                  seasonChips.clear();
+                  for (final String sn : seasons) {
+                      TextView chip = Ui.chip(this, "الموسم " + sn);
+                      chip.setOnClickListener(v -> showSeason(sn));
+                      LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                      lp.setMargins(dp(6), 0, dp(6), 0);
+                      seasonBar.addView(chip, lp);
+                      seasonChips.add(chip);
+                  }
+                  if (start != null) showSeason(start);
+                  list.requestFocus();
+              }
+
+              void showSeason(String s) {
+                  curSeason = s;
+                  for (int i = 0; i < seasonChips.size(); i++) seasonChips.get(i).setSelected(seasons.get(i).equals(s));
+                  shown.clear();
+                  for (Channel e : all) if (s.equals(e.season)) shown.add(e);
+                  fillRows();
+                  // نوقف على أول حلقة ما خلصت
+                  int sel = 0;
+                  for (int i = 0; i < shown.size(); i++) {
+                      if (Store.getPos(this, shown.get(i).url) > 0) {
+                          sel = i;
+                          break;
+                      }
+                  }
+                  list.setSelection(sel);
+                  status.setText("الموسم " + s + "  •  " + shown.size() + " حلقة");
+              }
+
+              void fillRows() {
+                  rows.clear();
+                  for (Channel e : shown) {
+                      StringBuilder t = new StringBuilder("الحلقة ").append(e.episode == null ? "" : e.episode);
+                      if (e.epTitle != null && !e.epTitle.isEmpty()) t.append("  •  ").append(e.epTitle);
+                      long p = Store.getPos(this, e.url);
+                      if (p > 0) t.append("   ⏯ ").append(PlayerActivity.fmt(p));
+                      rows.add(new IconAdapter.Row(t.toString(), null, p > 0 ? "⏯" : "▶"));
+                  }
+                  adapter.notifyDataSetChanged();
+              }
+
+              void playEpisode(int pos) {
+                  if (pos < 0 || pos >= shown.size()) return;
+                  int idx = all.indexOf(shown.get(pos));
+                  if (idx < 0) return;
+                  Data.current.clear();
+                  Data.current.addAll(all);
+                  Intent i = new Intent(this, PlayerActivity.class);
+                  i.putExtra("index", idx);
+                  i.putExtra("vod", true);
+                  i.putExtra("series", true);
+                  i.putExtra("section", Data.SERIES);
+                  startActivity(i);
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  if (curSeason != null) {
+                      int sel = list.getSelectedItemPosition();
+                      fillRows();
+                      if (sel >= 0) list.setSelection(sel);
+                  }
+              }
+          }
+          EOF
+
           cat > app/src/main/java/com/my/iptv/SettingsActivity.java <<'EOF'
           package com.my.iptv;
 
@@ -2814,6 +3559,8 @@ jobs:
                   o.putOpt("seriesId", ch.seriesId);
                   o.putOpt("logo", ch.logo);
                   o.putOpt("streamId", ch.streamId);
+                  o.putOpt("season", ch.season);
+                  o.putOpt("episode", ch.episode);
                   return o;
               }
 
@@ -2830,6 +3577,8 @@ jobs:
                   ch.seriesId = s(o, "seriesId");
                   ch.logo = s(o, "logo");
                   ch.streamId = s(o, "streamId");
+                  ch.season = s(o, "season");
+                  ch.episode = s(o, "episode");
                   return ch;
               }
 
@@ -2931,6 +3680,16 @@ jobs:
                   if (url == null) return;
                   if (pos <= 0) positions(c).edit().remove(url).apply();
                   else positions(c).edit().putLong(url, pos).apply();
+              }
+
+              public static long getDur(Context c, String url) {
+                  if (url == null) return 0;
+                  return positions(c).getLong("d:" + url, 0);
+              }
+
+              public static void setDur(Context c, String url, long d) {
+                  if (url == null || d <= 0) return;
+                  positions(c).edit().putLong("d:" + url, d).apply();
               }
 
               public static List<Channel> cw(Context c, int sec) {
