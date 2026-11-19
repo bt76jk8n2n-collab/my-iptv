@@ -277,7 +277,20 @@ jobs:
 
           // دليل البرامج: وش شغال الحين ووش بعده
           public class Epg {
-              static final Map<String, String> cache = new HashMap<>();
+              public static class Info {
+                  public String text = "";
+                  public long start;
+                  public long end;
+
+                  public int percent() {
+                      long now = System.currentTimeMillis() / 1000;
+                      if (end <= start || now < start) return -1;
+                      return (int) Math.min(100, (now - start) * 100 / (end - start));
+                  }
+              }
+
+              static final Info EMPTY = new Info();
+              static final Map<String, Info> cache = new HashMap<>();
               static final Map<String, Long> when = new HashMap<>();
               static final long TTL = 10 * 60 * 1000;
 
@@ -300,17 +313,17 @@ jobs:
                   return last;
               }
 
-              public static String nowNext(Account a, Channel ch) throws Exception {
+              public static Info nowNext(Account a, Channel ch) throws Exception {
                   String[] c = Loader.creds(a);
-                  if (c == null) return "";
+                  if (c == null) return EMPTY;
                   String id = streamIdOf(ch);
-                  if (id == null) return "";
+                  if (id == null) return EMPTY;
                   synchronized (cache) {
                       Long t = when.get(id);
                       if (t != null && System.currentTimeMillis() - t < TTL) return cache.get(id);
                   }
                   String body = Loader.readAll(Loader.api(c, "get_short_epg") + "&stream_id=" + id + "&limit=4");
-                  String res = "";
+                  Info res = new Info();
                   if (body.startsWith("{")) {
                       JSONObject o = new JSONObject(body);
                       JSONArray l = o.optJSONArray("epg_listings");
@@ -325,6 +338,10 @@ jobs:
                               if (en > 0 && en < now) continue;
                               String title = dec(e.optString("title", ""));
                               if (title.isEmpty()) continue;
+                              if (n == 0) {
+                                  res.start = st;
+                                  res.end = en;
+                              }
                               if (sb.length() > 0) sb.append('\n');
                               sb.append(n == 0 ? "الآن: " : "التالي: ").append(title);
                               if (st > 0) {
@@ -335,7 +352,7 @@ jobs:
                               n++;
                           }
                       }
-                      res = sb.toString();
+                      res.text = sb.toString();
                   }
                   synchronized (cache) {
                       cache.put(id, res);
@@ -523,26 +540,29 @@ jobs:
                       LinearLayout row = new LinearLayout(ctx);
                       row.setOrientation(LinearLayout.HORIZONTAL);
                       row.setGravity(Gravity.CENTER_VERTICAL);
-                      row.setPadding(dp(12), dp(8), dp(12), dp(8));
-                      row.setMinimumHeight(dp(56));
+                      row.setPadding(dp(16), dp(8), dp(16), dp(8));
+                      row.setMinimumHeight(dp(62));
 
                       FrameLayout box = new FrameLayout(ctx);
+                      box.setBackground(Ui.round(ctx, 0x1AFFFFFF, 10));
+                      box.setPadding(dp(4), dp(4), dp(4), dp(4));
                       h = new Holder();
                       h.image = new ImageView(ctx);
                       h.image.setScaleType(ImageView.ScaleType.FIT_CENTER);
                       h.emoji = new TextView(ctx);
-                      h.emoji.setTextSize(24);
+                      h.emoji.setTextSize(22);
                       h.emoji.setGravity(Gravity.CENTER);
-                      box.addView(h.image, new FrameLayout.LayoutParams(dp(56), dp(40), Gravity.CENTER));
-                      box.addView(h.emoji, new FrameLayout.LayoutParams(dp(56), dp(40), Gravity.CENTER));
-                      row.addView(box, new LinearLayout.LayoutParams(dp(56), dp(40)));
+                      box.addView(h.image, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+                      box.addView(h.emoji, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT, Gravity.CENTER));
+                      row.addView(box, new LinearLayout.LayoutParams(dp(64), dp(44)));
 
                       h.text = new TextView(ctx);
                       h.text.setTextColor(Color.WHITE);
-                      h.text.setTextSize(20);
+                      h.text.setTextSize(19);
+                      h.text.setTypeface(Ui.MEDIUM);
                       h.text.setSingleLine(true);
                       h.text.setEllipsize(TextUtils.TruncateAt.END);
-                      h.text.setPadding(dp(14), 0, 0, 0);
+                      h.text.setPadding(dp(16), 0, dp(4), 0);
                       row.addView(h.text, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
                       row.setTag(h);
                       cv = row;
@@ -964,7 +984,6 @@ jobs:
           import android.graphics.Color;
           import android.os.Bundle;
           import android.text.InputType;
-          import android.widget.Button;
           import android.widget.EditText;
           import android.widget.LinearLayout;
           import android.widget.ScrollView;
@@ -985,10 +1004,11 @@ jobs:
                   SharedPreferences p = getSharedPreferences("cfg", MODE_PRIVATE);
 
                   ScrollView sv = new ScrollView(this);
-                  sv.setBackgroundColor(0xFF101820);
+                  sv.setBackground(Ui.background());
+                  sv.setFillViewport(true);
                   box = new LinearLayout(this);
                   box.setOrientation(LinearLayout.VERTICAL);
-                  box.setPadding(dp(48), dp(24), dp(48), dp(24));
+                  box.setPadding(dp(120), dp(40), dp(120), dp(40));
                   sv.addView(box);
 
                   label("إعداد الاشتراك", 28, Color.WHITE);
@@ -996,7 +1016,7 @@ jobs:
                   label("الطريقة الأولى: رابط M3U", 20, 0xFF93C5FD);
                   m3u = field("الصق رابط M3U هنا", p.getString("m3u", ""),
                           InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-                  Button b1 = button("دخول بالرابط");
+                  TextView b1 = button("دخول بالرابط");
                   b1.setOnClickListener(v -> {
                       String u = m3u.getText().toString().trim();
                       if (u.isEmpty()) {
@@ -1013,7 +1033,7 @@ jobs:
                   user = field("اسم المستخدم", p.getString("user", ""), InputType.TYPE_CLASS_TEXT);
                   pass = field("كلمة المرور", p.getString("pass", ""),
                           InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-                  Button b2 = button("دخول بـ Xtream");
+                  TextView b2 = button("دخول بـ Xtream");
                   b2.setOnClickListener(v -> {
                       String s = server.getText().toString().trim();
                       String us = user.getText().toString().trim();
@@ -1049,22 +1069,22 @@ jobs:
 
               EditText field(String hint, String value, int inputType) {
                   EditText e = new EditText(this);
+                  Ui.field(this, e);
                   e.setHint(hint);
                   e.setText(value);
-                  e.setSingleLine(true);
                   e.setInputType(inputType);
-                  e.setTextColor(Color.WHITE);
-                  e.setHintTextColor(0xFF8899AA);
-                  e.setTextSize(20);
-                  box.addView(e);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, dp(6), 0, dp(6));
+                  box.addView(e, lp);
                   return e;
               }
 
-              Button button(String text) {
-                  Button btn = new Button(this);
-                  btn.setText(text);
+              TextView button(String text) {
+                  TextView btn = Ui.chip(this, text);
                   btn.setTextSize(20);
-                  box.addView(btn);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, dp(10), 0, dp(10));
+                  box.addView(btn, lp);
                   return btn;
               }
           }
@@ -1091,12 +1111,12 @@ jobs:
           import android.view.inputmethod.EditorInfo;
           import android.view.inputmethod.InputMethodManager;
           import android.widget.AdapterView;
-          import android.widget.Button;
           import android.widget.EditText;
           import android.widget.FrameLayout;
           import android.widget.ImageView;
           import android.widget.LinearLayout;
           import android.widget.ListView;
+          import android.widget.ProgressBar;
           import android.widget.TextView;
           import android.widget.Toast;
 
@@ -1107,6 +1127,11 @@ jobs:
           import androidx.media3.ui.PlayerView;
 
           import com.bumptech.glide.Glide;
+          import com.bumptech.glide.load.resource.drawable.DrawableTransitionOptions;
+
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
 
           import java.util.ArrayList;
           import java.util.Collections;
@@ -1136,13 +1161,16 @@ jobs:
 
               TextView status;
               EditText search;
-              Button backBtn;
+              TextView backBtn;
               ListView list;
               IconAdapter adapter;
               ImageView pvImage;
               PlayerView pvVideo;
               TextView pvEmoji, pvTitle, pvSub, pvEpg;
-              final Button[] tabs = new Button[3];
+              final TextView[] tabs = new TextView[3];
+              TextView clock, liveBadge;
+              LinearLayout pvEpgBox;
+              ProgressBar pvProgress;
 
               final List<IconAdapter.Row> rows = new ArrayList<>();
               final List<String> groupKeys = new ArrayList<>();
@@ -1177,6 +1205,13 @@ jobs:
               final Runnable searchRun = this::runSearch;
               final Runnable jumpRun = this::jumpToNumber;
               final Runnable previewRun = this::startPreview;
+              final Runnable clockRun = new Runnable() {
+                  @Override
+                  public void run() {
+                      tickClock();
+                      ui.postDelayed(this, 20000);
+                  }
+              };
 
               @Override
               protected void onCreate(Bundle b) {
@@ -1194,112 +1229,138 @@ jobs:
                   return (int) (v * getResources().getDisplayMetrics().density);
               }
 
-              Button makeButton(String text) {
-                  Button btn = new Button(this);
-                  btn.setText(text);
-                  btn.setTextSize(18);
-                  return btn;
-              }
-
-              void toast(String s) {
-                  Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
-              }
-
               void buildUi() {
                   LinearLayout root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
-                  root.setBackgroundColor(0xFF101820);
-                  root.setPadding(dp(24), dp(12), dp(24), dp(12));
+                  root.setBackground(Ui.background());
+                  root.setPadding(dp(32), dp(20), dp(32), dp(20));
 
+                  // الشريط العلوي: الاسم والساعة، التبويبات، البحث، الأزرار
                   LinearLayout top = new LinearLayout(this);
                   top.setOrientation(LinearLayout.HORIZONTAL);
+                  top.setGravity(Gravity.CENTER_VERTICAL);
+
+                  LinearLayout brand = new LinearLayout(this);
+                  brand.setOrientation(LinearLayout.VERTICAL);
+                  TextView appName = Ui.text(this, String.valueOf(getApplicationInfo().loadLabel(getPackageManager())), 26, Ui.TEXT, Ui.BOLD);
+                  clock = Ui.text(this, "", 15, Ui.SUB, Ui.MEDIUM);
+                  brand.addView(appName);
+                  brand.addView(clock);
+                  top.addView(brand);
+                  top.addView(new View(this), new LinearLayout.LayoutParams(dp(28), 1));
+
                   for (int i = 0; i < 3; i++) {
                       final int idx = i;
-                      tabs[i] = makeButton(TAB_NAMES[i]);
-                      tabs[i].setTextSize(20);
+                      tabs[i] = Ui.chip(this, TAB_EMOJI[i] + "  " + TAB_NAMES[i]);
+                      tabs[i].setTextSize(19);
                       tabs[i].setOnClickListener(v -> switchSection(idx));
-                      top.addView(tabs[i]);
+                      LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                      tp.setMargins(dp(6), 0, dp(6), 0);
+                      top.addView(tabs[i], tp);
                   }
-                  top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-                  Button refresh = makeButton("تحديث");
-                  Button settings = makeButton("⚙  الإعدادات");
-                  top.addView(refresh);
-                  top.addView(settings);
-                  root.addView(top);
 
                   search = new EditText(this);
-                  search.setHint("🔍  اكتب للبحث...");
-                  search.setSingleLine(true);
-                  search.setTextSize(20);
-                  search.setTextColor(Color.WHITE);
-                  search.setHintTextColor(0xFF8899AA);
+                  Ui.field(this, search);
+                  search.setHint("🔍   ابحث عن قناة، فيلم، مسلسل...");
                   search.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
                   search.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
-                  root.addView(search);
+                  LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
+                  sp.setMargins(dp(20), 0, dp(20), 0);
+                  top.addView(search, sp);
 
-                  status = new TextView(this);
-                  status.setTextColor(0xFFAABBCC);
-                  status.setTextSize(18);
-                  status.setPadding(0, dp(4), 0, dp(8));
+                  TextView refresh = Ui.chip(this, "⟳  تحديث");
+                  TextView settings = Ui.chip(this, "⚙  الإعدادات");
+                  LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  bp.setMargins(dp(6), 0, dp(6), 0);
+                  top.addView(refresh, bp);
+                  top.addView(settings, new LinearLayout.LayoutParams(bp));
+                  root.addView(top);
+
+                  status = Ui.text(this, "", 16, Ui.SUB, Ui.MEDIUM);
+                  status.setPadding(dp(4), dp(14), dp(4), dp(10));
+                  status.setSingleLine(true);
                   root.addView(status);
 
+                  // الجسم: القائمة يسار، والعرض يمين
                   LinearLayout body = new LinearLayout(this);
                   body.setOrientation(LinearLayout.HORIZONTAL);
                   body.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
 
                   LinearLayout left = new LinearLayout(this);
                   left.setOrientation(LinearLayout.VERTICAL);
-                  backBtn = makeButton("⬅  رجوع للأقسام");
+                  left.setBackground(Ui.round(this, Ui.GLASS, 24));
+                  left.setPadding(dp(10), dp(10), dp(10), dp(10));
+                  backBtn = Ui.chip(this, "⬅  رجوع للأقسام");
                   backBtn.setVisibility(View.GONE);
-                  left.addView(backBtn, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                  LinearLayout.LayoutParams bbp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  bbp.setMargins(dp(6), dp(2), dp(6), dp(8));
+                  left.addView(backBtn, bbp);
                   list = new ListView(this);
-                  list.setSelector(new ColorDrawable(0x882563EB));
-                  list.setDrawSelectorOnTop(true);
-                  list.setDivider(new ColorDrawable(0x22FFFFFF));
-                  list.setDividerHeight(1);
-                  list.setBackgroundColor(0xFF18222E);
+                  list.setSelector(Ui.selector(this));
+                  list.setDrawSelectorOnTop(false);
+                  list.setDivider(null);
+                  list.setDividerHeight(0);
+                  list.setVerticalScrollBarEnabled(false);
+                  list.setCacheColorHint(0);
                   left.addView(list, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
                   body.addView(left, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2));
 
                   LinearLayout right = new LinearLayout(this);
                   right.setOrientation(LinearLayout.VERTICAL);
-                  right.setGravity(Gravity.CENTER);
-                  right.setBackgroundColor(0xFF18222E);
+                  right.setGravity(Gravity.CENTER_HORIZONTAL);
+                  right.setBackground(Ui.round(this, Ui.GLASS, 24));
                   right.setPadding(dp(24), dp(24), dp(24), dp(24));
                   right.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+
                   FrameLayout pvBox = new FrameLayout(this);
+                  pvBox.setBackground(Ui.round(this, 0xFF05070F, 20));
+                  pvBox.setClipToOutline(true);
                   pvImage = new ImageView(this);
                   pvImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
-                  pvEmoji = new TextView(this);
-                  pvEmoji.setTextSize(96);
+                  pvImage.setPadding(dp(24), dp(24), dp(24), dp(24));
+                  pvEmoji = Ui.text(this, "", 96, Ui.TEXT, null);
                   pvEmoji.setGravity(Gravity.CENTER);
                   pvVideo = new PlayerView(this);
                   pvVideo.setUseController(false);
                   pvVideo.setVisibility(View.GONE);
-                  FrameLayout.LayoutParams fill = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
-                  pvBox.addView(pvImage, fill);
+                  pvBox.addView(pvImage, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                   pvBox.addView(pvEmoji, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                   pvBox.addView(pvVideo, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  liveBadge = Ui.text(this, "●  مباشر", 14, Ui.TEXT, Ui.BOLD);
+                  liveBadge.setBackground(Ui.round(this, Ui.LIVE, 12));
+                  liveBadge.setPadding(dp(12), dp(4), dp(12), dp(4));
+                  liveBadge.setVisibility(View.GONE);
+                  FrameLayout.LayoutParams lbp = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP | Gravity.START);
+                  lbp.setMargins(dp(14), dp(14), dp(14), dp(14));
+                  pvBox.addView(liveBadge, lbp);
                   right.addView(pvBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
-                  pvTitle = new TextView(this);
-                  pvTitle.setTextColor(Color.WHITE);
-                  pvTitle.setTextSize(26);
+
+                  pvTitle = Ui.text(this, "", 28, Ui.TEXT, Ui.BOLD);
                   pvTitle.setGravity(Gravity.CENTER);
-                  pvTitle.setPadding(0, dp(12), 0, dp(6));
-                  right.addView(pvTitle);
-                  pvSub = new TextView(this);
-                  pvSub.setTextColor(0xFFAABBCC);
-                  pvSub.setTextSize(17);
+                  pvTitle.setPadding(0, dp(18), 0, dp(4));
+                  pvTitle.setSingleLine(true);
+                  right.addView(pvTitle, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                  pvSub = Ui.text(this, "", 16, Ui.SUB, Ui.MEDIUM);
                   pvSub.setGravity(Gravity.CENTER);
-                  right.addView(pvSub);
-                  pvEpg = new TextView(this);
-                  pvEpg.setTextColor(0xFF93C5FD);
-                  pvEpg.setTextSize(18);
-                  pvEpg.setGravity(Gravity.CENTER);
-                  pvEpg.setPadding(0, dp(8), 0, 0);
-                  right.addView(pvEpg);
+                  right.addView(pvSub, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                  pvEpgBox = new LinearLayout(this);
+                  pvEpgBox.setOrientation(LinearLayout.VERTICAL);
+                  pvEpgBox.setBackground(Ui.round(this, Ui.GLASS, 16));
+                  pvEpgBox.setPadding(dp(18), dp(12), dp(18), dp(14));
+                  pvEpgBox.setVisibility(View.GONE);
+                  pvEpg = Ui.text(this, "", 17, 0xFFE2E8F0, Ui.MEDIUM);
+                  pvEpgBox.addView(pvEpg);
+                  pvProgress = Ui.progress(this);
+                  LinearLayout.LayoutParams pgp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(6));
+                  pgp.setMargins(0, dp(10), 0, 0);
+                  pvEpgBox.addView(pvProgress, pgp);
+                  LinearLayout.LayoutParams ebp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  ebp.setMargins(0, dp(14), 0, 0);
+                  right.addView(pvEpgBox, ebp);
+
                   LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3);
-                  rp.setMargins(dp(16), 0, 0, 0);
+                  rp.setMargins(dp(20), 0, 0, 0);
                   body.addView(right, rp);
 
                   root.addView(body, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
@@ -1353,6 +1414,12 @@ jobs:
                   setContentView(root);
               }
 
+              void tickClock() {
+                  Date now = new Date();
+                  clock.setText(new SimpleDateFormat("HH:mm", Locale.US).format(now) + "   •   "
+                          + new SimpleDateFormat("EEEE d MMMM", new Locale("ar")).format(now));
+              }
+
               void hideKeyboard() {
                   InputMethodManager imm = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
                   if (imm != null) imm.hideSoftInputFromWindow(search.getWindowToken(), 0);
@@ -1387,10 +1454,7 @@ jobs:
                   stopPreview();
                   section = sec;
                   searchMode = false;
-                  for (int i = 0; i < 3; i++) {
-                      tabs[i].setAlpha(i == sec ? 1f : 0.55f);
-                      tabs[i].setText(i == sec ? "● " + TAB_NAMES[i] : TAB_NAMES[i]);
-                  }
+                  for (int i = 0; i < 3; i++) tabs[i].setSelected(i == sec);
                   if (!query().isEmpty()) search.setText("");
                   groupKeys.clear();
                   rows.clear();
@@ -1585,7 +1649,7 @@ jobs:
                   if (img != null && !img.isEmpty()) {
                       pvEmoji.setVisibility(View.GONE);
                       pvImage.setVisibility(View.VISIBLE);
-                      Glide.with(this).load(img).fitCenter().into(pvImage);
+                      Glide.with(this).load(img).transition(DrawableTransitionOptions.withCrossFade(220)).fitCenter().into(pvImage);
                   } else {
                       Glide.with(this).clear(pvImage);
                       pvImage.setImageDrawable(null);
@@ -1600,6 +1664,7 @@ jobs:
               void updatePreview(int pos) {
                   epgToken++;
                   pvEpg.setText("");
+                  pvEpgBox.setVisibility(View.GONE);
                   if (pos < 0 || pos >= rows.size()) {
                       stopPreview();
                       return;
@@ -1656,6 +1721,7 @@ jobs:
                                   preview.play();
                               } else {
                                   pvVideo.setVisibility(View.GONE);
+                                  liveBadge.setVisibility(View.GONE);
                               }
                           }
                       });
@@ -1664,6 +1730,7 @@ jobs:
                   previewTries = Players.tries(previewCh, false);
                   previewTry = 0;
                   pvVideo.setVisibility(View.VISIBLE);
+                  liveBadge.setVisibility(View.VISIBLE);
                   preview.setMediaItem(previewTries.get(0));
                   preview.prepare();
                   preview.play();
@@ -1677,6 +1744,7 @@ jobs:
                       preview.clearMediaItems();
                   }
                   if (pvVideo != null) pvVideo.setVisibility(View.GONE);
+                  if (liveBadge != null) liveBadge.setVisibility(View.GONE);
               }
 
               void releasePreview() {
@@ -1694,15 +1762,20 @@ jobs:
                   ui.postDelayed(() -> {
                       if (tok != epgToken) return;
                       new Thread(() -> {
-                          String t;
+                          Epg.Info t;
                           try {
                               t = Epg.nowNext(acc, ch);
                           } catch (Exception e) {
-                              t = "";
+                              t = Epg.EMPTY;
                           }
-                          final String fin = t;
+                          final Epg.Info fin = t;
                           ui.post(() -> {
-                              if (tok == epgToken) pvEpg.setText(fin);
+                              if (tok != epgToken || fin.text.isEmpty()) return;
+                              pvEpg.setText(fin.text);
+                              int pc = fin.percent();
+                              pvProgress.setVisibility(pc >= 0 ? View.VISIBLE : View.GONE);
+                              if (pc >= 0) pvProgress.setProgress(pc);
+                              pvEpgBox.setVisibility(View.VISIBLE);
                           });
                       }).start();
                   }, 500);
@@ -2002,8 +2075,18 @@ jobs:
               }
 
               @Override
+              protected void onPause() {
+                  super.onPause();
+                  ui.removeCallbacks(clockRun);
+              }
+
+              @Override
               protected void onResume() {
                   super.onResume();
+                  if (clock != null) {
+                      ui.removeCallbacks(clockRun);
+                      clockRun.run();
+                  }
                   if (adapter == null || !Data.loaded[section]) return;
                   refreshVisible();
                   rebuildGroupKeys();
@@ -2072,7 +2155,11 @@ jobs:
           import android.view.KeyEvent;
           import android.view.View;
           import android.view.WindowManager;
+          import android.graphics.drawable.GradientDrawable;
           import android.widget.FrameLayout;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.ProgressBar;
           import android.widget.TextView;
           import android.widget.Toast;
 
@@ -2087,7 +2174,11 @@ jobs:
           import androidx.media3.exoplayer.ExoPlayer;
           import androidx.media3.ui.PlayerView;
 
+          import com.bumptech.glide.Glide;
+
+          import java.text.SimpleDateFormat;
           import java.util.ArrayList;
+          import java.util.Date;
           import java.util.List;
           import java.util.Locale;
 
@@ -2095,6 +2186,10 @@ jobs:
               ExoPlayer player;
               PlayerView view;
               TextView info;
+              LinearLayout bar;
+              ImageView barLogo;
+              TextView barTitle, barEpg, barClock;
+              ProgressBar barProgress;
               int index;
               boolean vod;
               boolean series;
@@ -2107,6 +2202,7 @@ jobs:
               long startPos = 0;
               final Handler h = new Handler(Looper.getMainLooper());
               final Runnable hideInfo = () -> info.setVisibility(View.GONE);
+              final Runnable hideBar = () -> bar.animate().alpha(0f).setDuration(250).withEndAction(() -> bar.setVisibility(View.GONE)).start();
               final Runnable jumpRun = this::jumpToNumber;
               final Runnable nextRun = () -> play(index + 1);
               final Runnable saveRun = new Runnable() {
@@ -2137,16 +2233,50 @@ jobs:
                   view.setControllerShowTimeoutMs(4000);
                   root.addView(view, new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
-                  info = new TextView(this);
-                  info.setTextColor(Color.WHITE);
-                  info.setTextSize(24);
-                  info.setBackgroundColor(0xCC000000);
-                  info.setPadding(40, 24, 40, 24);
+                  // رسائل قصيرة فوق بالنص
+                  info = Ui.text(this, "", 20, Color.WHITE, Ui.MEDIUM);
+                  info.setBackground(Ui.round(this, 0xE6111827, 24));
+                  info.setPadding(Ui.dp(this, 26), Ui.dp(this, 12), Ui.dp(this, 26), Ui.dp(this, 12));
+                  info.setGravity(Gravity.CENTER);
+                  info.setVisibility(View.GONE);
                   FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
-                          Gravity.TOP | Gravity.START);
-                  lp.setMargins(48, 48, 48, 48);
+                          Gravity.TOP | Gravity.CENTER_HORIZONTAL);
+                  lp.setMargins(0, Ui.dp(this, 32), 0, 0);
                   root.addView(info, lp);
+
+                  // شريط المعلومات تحت
+                  bar = new LinearLayout(this);
+                  bar.setOrientation(LinearLayout.HORIZONTAL);
+                  bar.setGravity(Gravity.CENTER_VERTICAL);
+                  bar.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP,
+                          new int[]{0xF2000000, 0xB3000000, 0x00000000}));
+                  bar.setPadding(Ui.dp(this, 48), Ui.dp(this, 80), Ui.dp(this, 48), Ui.dp(this, 36));
+                  bar.setVisibility(View.GONE);
+                  FrameLayout logoBox = new FrameLayout(this);
+                  logoBox.setBackground(Ui.round(this, 0x26FFFFFF, 18));
+                  logoBox.setPadding(Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10), Ui.dp(this, 10));
+                  barLogo = new ImageView(this);
+                  barLogo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                  logoBox.addView(barLogo, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  bar.addView(logoBox, new LinearLayout.LayoutParams(Ui.dp(this, 130), Ui.dp(this, 90)));
+                  LinearLayout txt = new LinearLayout(this);
+                  txt.setOrientation(LinearLayout.VERTICAL);
+                  txt.setPadding(Ui.dp(this, 24), 0, Ui.dp(this, 24), 0);
+                  barTitle = Ui.text(this, "", 30, Color.WHITE, Ui.BOLD);
+                  barTitle.setSingleLine(true);
+                  barEpg = Ui.text(this, "", 18, 0xFFCBD5E1, Ui.MEDIUM);
+                  barProgress = Ui.progress(this);
+                  txt.addView(barTitle);
+                  txt.addView(barEpg);
+                  LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(Ui.dp(this, 420), Ui.dp(this, 6));
+                  pp.setMargins(0, Ui.dp(this, 10), 0, 0);
+                  txt.addView(barProgress, pp);
+                  bar.addView(txt, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+                  barClock = Ui.text(this, "", 34, Color.WHITE, Ui.BOLD);
+                  bar.addView(barClock);
+                  root.addView(bar, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT,
+                          FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM));
                   setContentView(root);
 
                   player = Players.create(this);
@@ -2208,15 +2338,20 @@ jobs:
                               .setItems(new String[]{"▶  أكمل من " + fmt(saved), "⏮  من البداية"}, (d, w) -> {
                                   startPos = w == 0 ? saved : 0;
                                   startTry();
-                                  showInfo(c.name, 3000);
+                                  showVodBar();
                               })
                               .setOnCancelListener(d -> finish())
                               .show();
                   } else {
                       startPos = 0;
                       startTry();
-                      showInfo(c.name, 3000);
+                      showVodBar();
                   }
+              }
+
+              void showVodBar() {
+                  Channel c = current();
+                  showBar(c, c.name, "⬆ الصوت والترجمة     ⬅ ➡ ترجيع وتقديم     OK إيقاف وتشغيل", 4000);
               }
 
               void startTry() {
@@ -2268,23 +2403,47 @@ jobs:
                   h.postDelayed(hideInfo, ms);
               }
 
-              // اسم القناة + دليل البرامج
+              // شريط المعلومات: الشعار، الاسم، دليل البرامج، الساعة
+              void showBar(Channel c, String title, String sub, long ms) {
+                  barTitle.setText(title);
+                  barEpg.setText(sub);
+                  barProgress.setVisibility(View.GONE);
+                  barClock.setText(new SimpleDateFormat("HH:mm", Locale.US).format(new Date()));
+                  if (c.logo != null && !c.logo.isEmpty()) {
+                      barLogo.setVisibility(View.VISIBLE);
+                      ((View) barLogo.getParent()).setVisibility(View.VISIBLE);
+                      Glide.with(this).load(c.logo).fitCenter().into(barLogo);
+                  } else {
+                      ((View) barLogo.getParent()).setVisibility(View.GONE);
+                  }
+                  bar.animate().cancel();
+                  bar.setAlpha(1f);
+                  bar.setVisibility(View.VISIBLE);
+                  h.removeCallbacks(hideBar);
+                  h.postDelayed(hideBar, ms);
+              }
+
               void showLiveInfo() {
                   final Channel c = current();
-                  final String base = (index + 1) + ".  " + c.name;
-                  showInfo(base, 5000);
+                  final String title = (index + 1) + "   " + c.name;
+                  showBar(c, title, c.group == null ? "" : c.group, 6000);
                   final int tok = ++infoToken;
                   final Account acc = Account.read(this);
                   new Thread(() -> {
-                      String e = "";
+                      Epg.Info e;
                       try {
                           e = Epg.nowNext(acc, c);
                       } catch (Exception ignored) {
+                          e = Epg.EMPTY;
                       }
-                      final String fin = e;
-                      if (!fin.isEmpty()) {
+                      final Epg.Info fin = e;
+                      if (!fin.text.isEmpty()) {
                           h.post(() -> {
-                              if (tok == infoToken && info.getVisibility() == View.VISIBLE) info.setText(base + "\n" + fin);
+                              if (tok != infoToken || bar.getVisibility() != View.VISIBLE) return;
+                              barEpg.setText(fin.text);
+                              int pc = fin.percent();
+                              barProgress.setVisibility(pc >= 0 ? View.VISIBLE : View.GONE);
+                              if (pc >= 0) barProgress.setProgress(pc);
                           });
                       }
                   }).start();
@@ -2372,7 +2531,7 @@ jobs:
                           return true;
                       case KeyEvent.KEYCODE_DPAD_DOWN:
                           view.showController();
-                          showInfo(current().name + "\n⬆ الصوت والترجمة  •  ⬅➡ تقديم وترجيع", 3000);
+                          showVodBar();
                           return true;
                       case KeyEvent.KEYCODE_MEDIA_NEXT:
                           if (series) {
@@ -2504,7 +2663,6 @@ jobs:
           import android.net.Uri;
           import android.os.Build;
           import android.os.Bundle;
-          import android.widget.Button;
           import android.widget.CheckBox;
           import android.widget.LinearLayout;
           import android.widget.ScrollView;
@@ -2522,16 +2680,18 @@ jobs:
               protected void onCreate(Bundle b) {
                   super.onCreate(b);
                   ScrollView sv = new ScrollView(this);
-                  sv.setBackgroundColor(0xFF101820);
+                  sv.setBackground(Ui.background());
+                  sv.setFillViewport(true);
                   box = new LinearLayout(this);
                   box.setOrientation(LinearLayout.VERTICAL);
-                  box.setPadding(dp(48), dp(24), dp(48), dp(24));
+                  box.setPadding(dp(120), dp(40), dp(120), dp(40));
                   sv.addView(box);
 
                   TextView title = new TextView(this);
                   title.setText("⚙  الإعدادات");
                   title.setTextColor(Color.WHITE);
-                  title.setTextSize(28);
+                  title.setTextSize(30);
+                  title.setTypeface(Ui.BOLD);
                   title.setPadding(0, 0, 0, dp(16));
                   box.addView(title);
 
@@ -2566,7 +2726,14 @@ jobs:
                   cb.setText(text);
                   cb.setTextSize(22);
                   cb.setTextColor(Color.WHITE);
-                  cb.setPadding(dp(8), dp(12), dp(8), dp(12));
+                  cb.setPadding(dp(12), dp(14), dp(12), dp(14));
+                  cb.setTypeface(Ui.MEDIUM);
+                  cb.setButtonTintList(android.content.res.ColorStateList.valueOf(Ui.ACCENT2));
+                  cb.setBackground(Ui.chipBg(this));
+                  Ui.focusScale(cb, 1.03f);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, dp(6), 0, dp(6));
+                  cb.setLayoutParams(lp);
                   cb.setChecked(Store.opt(this, key, def));
                   cb.setOnCheckedChangeListener((v, on) -> Store.setOpt(this, key, on));
                   box.addView(cb);
@@ -2583,11 +2750,12 @@ jobs:
               }
 
               void button(String text, Runnable r) {
-                  Button b = new Button(this);
-                  b.setText(text);
-                  b.setTextSize(20);
+                  TextView b = Ui.chip(this, text);
+                  b.setTextSize(19);
                   b.setOnClickListener(v -> r.run());
-                  box.addView(b);
+                  LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  lp.setMargins(0, dp(8), 0, dp(8));
+                  box.addView(b, lp);
               }
 
               void ensureOverlay() {
@@ -2797,6 +2965,133 @@ jobs:
 
               public static void setOpt(Context c, String key, boolean v) {
                   sp(c).edit().putBoolean("opt_" + key, v).apply();
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Ui.java <<'EOF'
+          package com.my.iptv;
+
+          import android.content.Context;
+          import android.content.res.ColorStateList;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.Drawable;
+          import android.graphics.drawable.GradientDrawable;
+          import android.graphics.drawable.InsetDrawable;
+          import android.graphics.drawable.StateListDrawable;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.widget.EditText;
+          import android.widget.ProgressBar;
+          import android.widget.TextView;
+
+          // الألوان والأشكال الموحدة للتطبيق
+          public class Ui {
+              public static final int BG1 = 0xFF070B18;
+              public static final int BG2 = 0xFF121A33;
+              public static final int CARD = 0xFF1A2440;
+              public static final int GLASS = 0x14FFFFFF;
+              public static final int GLASS2 = 0x22FFFFFF;
+              public static final int ACCENT1 = 0xFF7C5CFF;
+              public static final int ACCENT2 = 0xFF22D3EE;
+              public static final int TEXT = 0xFFFFFFFF;
+              public static final int SUB = 0xFF94A3B8;
+              public static final int LIVE = 0xFFEF4444;
+
+              public static final Typeface MEDIUM = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+              public static final Typeface BOLD = Typeface.create("sans-serif", Typeface.BOLD);
+
+              public static int dp(Context c, float v) {
+                  return (int) (v * c.getResources().getDisplayMetrics().density);
+              }
+
+              public static GradientDrawable round(Context c, int color, float r) {
+                  GradientDrawable g = new GradientDrawable();
+                  g.setColor(color);
+                  g.setCornerRadius(dp(c, r));
+                  return g;
+              }
+
+              public static GradientDrawable stroke(Context c, int color, float r, int strokeColor, float w) {
+                  GradientDrawable g = round(c, color, r);
+                  g.setStroke(dp(c, w), strokeColor);
+                  return g;
+              }
+
+              public static GradientDrawable accent(Context c, float r) {
+                  GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, new int[]{ACCENT1, ACCENT2});
+                  g.setCornerRadius(dp(c, r));
+                  return g;
+              }
+
+              public static Drawable background() {
+                  return new GradientDrawable(GradientDrawable.Orientation.TL_BR, new int[]{BG1, BG2, 0xFF0A0F22});
+              }
+
+              public static Drawable selector(Context c) {
+                  return new InsetDrawable(accent(c, 14), dp(c, 6), dp(c, 3), dp(c, 6), dp(c, 3));
+              }
+
+              public static StateListDrawable chipBg(Context c) {
+                  StateListDrawable s = new StateListDrawable();
+                  s.addState(new int[]{android.R.attr.state_focused}, accent(c, 22));
+                  s.addState(new int[]{android.R.attr.state_pressed}, accent(c, 22));
+                  s.addState(new int[]{android.R.attr.state_selected}, stroke(c, 0x337C5CFF, 22, ACCENT1, 2));
+                  s.addState(new int[]{}, round(c, GLASS2, 22));
+                  return s;
+              }
+
+              public static void focusScale(View v, float scale) {
+                  v.setOnFocusChangeListener((x, has) -> x.animate()
+                          .scaleX(has ? scale : 1f).scaleY(has ? scale : 1f).setDuration(140).start());
+              }
+
+              public static TextView chip(Context c, String text) {
+                  TextView t = new TextView(c);
+                  t.setText(text);
+                  t.setTextColor(TEXT);
+                  t.setTextSize(17);
+                  t.setTypeface(MEDIUM);
+                  t.setGravity(Gravity.CENTER);
+                  t.setPadding(dp(c, 22), dp(c, 10), dp(c, 22), dp(c, 10));
+                  t.setBackground(chipBg(c));
+                  t.setFocusable(true);
+                  t.setClickable(true);
+                  focusScale(t, 1.08f);
+                  return t;
+              }
+
+              public static StateListDrawable fieldBg(Context c) {
+                  StateListDrawable s = new StateListDrawable();
+                  s.addState(new int[]{android.R.attr.state_focused}, stroke(c, CARD, 24, ACCENT2, 2));
+                  s.addState(new int[]{}, stroke(c, GLASS, 24, GLASS2, 1));
+                  return s;
+              }
+
+              public static void field(Context c, EditText e) {
+                  e.setBackground(fieldBg(c));
+                  e.setTextColor(TEXT);
+                  e.setHintTextColor(SUB);
+                  e.setTextSize(18);
+                  e.setSingleLine(true);
+                  e.setPadding(dp(c, 20), dp(c, 12), dp(c, 20), dp(c, 12));
+              }
+
+              public static TextView text(Context c, String s, float size, int color, Typeface tf) {
+                  TextView t = new TextView(c);
+                  t.setText(s);
+                  t.setTextSize(size);
+                  t.setTextColor(color);
+                  if (tf != null) t.setTypeface(tf);
+                  return t;
+              }
+
+              public static ProgressBar progress(Context c) {
+                  ProgressBar p = new ProgressBar(c, null, android.R.attr.progressBarStyleHorizontal);
+                  p.setMax(100);
+                  p.setProgressTintList(ColorStateList.valueOf(ACCENT2));
+                  p.setProgressBackgroundTintList(ColorStateList.valueOf(0x33FFFFFF));
+                  return p;
               }
           }
           EOF
