@@ -181,7 +181,13 @@ jobs:
           import java.util.Map;
 
           public class Loader {
-              public static final String UA = "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36";
+              static final String[] UAS = {
+                      "IPTVSmartersPlayer",
+                      "Mozilla/5.0 (Linux; Android 11; Android TV) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+                      "okhttp/4.12.0",
+                      "VLC/3.0.20 LibVLC/3.0.20"
+              };
+              public static volatile String UA = UAS[0];
               public static final String NO_GROUP = "بدون قسم";
 
               static String fixUrl(String u) {
@@ -221,7 +227,7 @@ jobs:
                       byte[] buf = new byte[16384];
                       int n;
                       while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                      return out.toString("UTF-8");
+                      return out.toString("UTF-8").replace("﻿", "").trim();
                   } finally {
                       in.close();
                   }
@@ -304,8 +310,43 @@ jobs:
                   pass = pass.trim();
                   String base = server + "/player_api.php?username=" + URLEncoder.encode(user, "UTF-8")
                           + "&password=" + URLEncoder.encode(pass, "UTF-8");
+                  // نجرب أكثر من User-Agent لأن بعض السيرفرات ترفض بعضها
+                  JSONArray cats = null;
+                  String lastInfo = "";
+                  for (String ua : UAS) {
+                      UA = ua;
+                      try {
+                          String body = readAll(base + "&action=get_live_categories");
+                          if (body.startsWith("[")) {
+                              cats = new JSONArray(body);
+                              break;
+                          }
+                          lastInfo = body.length() > 150 ? body.substring(0, 150) : body;
+                          if (body.contains("\"auth\":0")) break;
+                      } catch (Exception e) {
+                          lastInfo = String.valueOf(e.getMessage());
+                      }
+                  }
+                  if (cats == null) {
+                      // آخر محاولة: نجيب القنوات كقائمة M3U من نفس السيرفر
+                      String m3u = server + "/get.php?username=" + URLEncoder.encode(user, "UTF-8")
+                              + "&password=" + URLEncoder.encode(pass, "UTF-8") + "&type=m3u_plus&output=ts";
+                      for (String ua : UAS) {
+                          UA = ua;
+                          try {
+                              List<Channel> tmp = new ArrayList<>();
+                              loadM3u(m3u, tmp);
+                              if (!tmp.isEmpty()) {
+                                  out.addAll(tmp);
+                                  return;
+                              }
+                          } catch (Exception e) {
+                              lastInfo = lastInfo + " | " + e.getMessage();
+                          }
+                      }
+                      throw new Exception("رد السيرفر: " + lastInfo);
+                  }
                   try {
-                      JSONArray cats = new JSONArray(readAll(base + "&action=get_live_categories"));
                       Map<String, String> names = new HashMap<>();
                       for (int i = 0; i < cats.length(); i++) {
                           JSONObject o = cats.getJSONObject(i);
