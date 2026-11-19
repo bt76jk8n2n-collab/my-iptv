@@ -9,7 +9,7 @@ permissions:
 
 env:
   # اسم التطبيق اللي يطلع على التلفزيون - تقدر تغيره
-  APP_NAME: "IPTV"
+  APP_NAME: "زغـلـول"
 
 jobs:
   build:
@@ -117,6 +117,8 @@ jobs:
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-feature android:name="android.software.leanback" android:required="false" />
               <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
               <application
@@ -135,6 +137,13 @@ jobs:
                   </activity>
                   <activity android:name=".LoginActivity" android:exported="false"
                       android:windowSoftInputMode="adjustResize" />
+                  <activity android:name=".SettingsActivity" android:exported="false" />
+                  <receiver android:name=".BootReceiver" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.BOOT_COMPLETED" />
+                          <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                      </intent-filter>
+                  </receiver>
                   <activity android:name=".PlayerActivity" android:exported="false"
                       android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden" />
               </application>
@@ -182,6 +191,28 @@ jobs:
           }
           EOF
 
+          cat > app/src/main/java/com/my/iptv/BootReceiver.java <<'EOF'
+          package com.my.iptv;
+
+          import android.content.BroadcastReceiver;
+          import android.content.Context;
+          import android.content.Intent;
+
+          // يفتح التطبيق لما يشتغل التلفزيون (إذا مفعّل من الإعدادات)
+          public class BootReceiver extends BroadcastReceiver {
+              @Override
+              public void onReceive(Context ctx, Intent intent) {
+                  if (!Store.opt(ctx, "autostart", false)) return;
+                  try {
+                      Intent i = new Intent(ctx, MainActivity.class);
+                      i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                      ctx.startActivity(i);
+                  } catch (Exception ignored) {
+                  }
+              }
+          }
+          EOF
+
           cat > app/src/main/java/com/my/iptv/Channel.java <<'EOF'
           package com.my.iptv;
 
@@ -192,6 +223,7 @@ jobs:
               public String group;
               public String seriesId;
               public String logo;
+              public String streamId;
               public long added;
           }
           EOF
@@ -225,6 +257,106 @@ jobs:
                       groups.get(i).clear();
                       items.get(i).clear();
                   }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Epg.java <<'EOF'
+          package com.my.iptv;
+
+          import android.util.Base64;
+
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.HashMap;
+          import java.util.Locale;
+          import java.util.Map;
+
+          // دليل البرامج: وش شغال الحين ووش بعده
+          public class Epg {
+              static final Map<String, String> cache = new HashMap<>();
+              static final Map<String, Long> when = new HashMap<>();
+              static final long TTL = 10 * 60 * 1000;
+
+              static String streamIdOf(Channel ch) {
+                  if (ch.streamId != null && !ch.streamId.isEmpty()) return ch.streamId;
+                  if (ch.url == null) return null;
+                  String u = ch.url;
+                  int q = u.indexOf('?');
+                  if (q >= 0) u = u.substring(0, q);
+                  int s = u.lastIndexOf('/');
+                  if (s < 0) return null;
+                  String last = u.substring(s + 1);
+                  int d = last.indexOf('.');
+                  if (d >= 0) last = last.substring(0, d);
+                  if (last.isEmpty()) return null;
+                  for (int i = 0; i < last.length(); i++) {
+                      char x = last.charAt(i);
+                      if (x < '0' || x > '9') return null;
+                  }
+                  return last;
+              }
+
+              public static String nowNext(Account a, Channel ch) throws Exception {
+                  String[] c = Loader.creds(a);
+                  if (c == null) return "";
+                  String id = streamIdOf(ch);
+                  if (id == null) return "";
+                  synchronized (cache) {
+                      Long t = when.get(id);
+                      if (t != null && System.currentTimeMillis() - t < TTL) return cache.get(id);
+                  }
+                  String body = Loader.readAll(Loader.api(c, "get_short_epg") + "&stream_id=" + id + "&limit=4");
+                  String res = "";
+                  if (body.startsWith("{")) {
+                      JSONObject o = new JSONObject(body);
+                      JSONArray l = o.optJSONArray("epg_listings");
+                      StringBuilder sb = new StringBuilder();
+                      long now = System.currentTimeMillis() / 1000;
+                      int n = 0;
+                      if (l != null) {
+                          for (int i = 0; i < l.length() && n < 2; i++) {
+                              JSONObject e = l.getJSONObject(i);
+                              long st = Loader.num(e.optString("start_timestamp", "0"));
+                              long en = Loader.num(e.optString("stop_timestamp", "0"));
+                              if (en > 0 && en < now) continue;
+                              String title = dec(e.optString("title", ""));
+                              if (title.isEmpty()) continue;
+                              if (sb.length() > 0) sb.append('\n');
+                              sb.append(n == 0 ? "الآن: " : "التالي: ").append(title);
+                              if (st > 0) {
+                                  sb.append("  (").append(hm(st));
+                                  if (n == 0 && en > 0) sb.append(" - ").append(hm(en));
+                                  sb.append(")");
+                              }
+                              n++;
+                          }
+                      }
+                      res = sb.toString();
+                  }
+                  synchronized (cache) {
+                      cache.put(id, res);
+                      when.put(id, System.currentTimeMillis());
+                  }
+                  return res;
+              }
+
+              static String hm(long sec) {
+                  return new SimpleDateFormat("HH:mm", Locale.US).format(new Date(sec * 1000));
+              }
+
+              static String dec(String s) {
+                  s = s.trim();
+                  if (s.length() >= 4 && s.length() % 4 == 0 && s.matches("[A-Za-z0-9+/]+=*")) {
+                      try {
+                          return new String(Base64.decode(s, Base64.DEFAULT), "UTF-8").trim();
+                      } catch (Exception ignored) {
+                      }
+                  }
+                  return s;
               }
           }
           EOF
@@ -724,6 +856,7 @@ jobs:
                       ch.name = o.optString("name", "");
                       ch.group = groupOf(names, o);
                       ch.logo = str(o, "stream_icon");
+                      ch.streamId = o.optString("stream_id");
                       String path = c[0] + "/live/" + c[1] + "/" + c[2] + "/" + o.optString("stream_id");
                       ch.url = path + ".m3u8";
                       ch.altUrl = path + ".ts";
@@ -813,6 +946,7 @@ jobs:
                       String ext = e.optString("container_extension", "mp4");
                       if (ext.isEmpty() || ext.equals("null")) ext = "mp4";
                       ch.url = c[0] + "/series/" + c[1] + "/" + c[2] + "/" + e.optString("id") + "." + ext;
+                      ch.seriesId = seriesId;
                       list.add(ch);
                   }
                   if (list.isEmpty()) throw new Exception("ما فيه حلقات لهالمسلسل");
@@ -940,6 +1074,7 @@ jobs:
           package com.my.iptv;
 
           import android.app.Activity;
+          import android.app.AlertDialog;
           import android.content.Context;
           import android.content.Intent;
           import android.graphics.Color;
@@ -963,26 +1098,41 @@ jobs:
           import android.widget.LinearLayout;
           import android.widget.ListView;
           import android.widget.TextView;
+          import android.widget.Toast;
+
+          import androidx.media3.common.MediaItem;
+          import androidx.media3.common.PlaybackException;
+          import androidx.media3.common.Player;
+          import androidx.media3.exoplayer.ExoPlayer;
+          import androidx.media3.ui.PlayerView;
 
           import com.bumptech.glide.Glide;
 
           import java.util.ArrayList;
           import java.util.Collections;
           import java.util.HashMap;
+          import java.util.HashSet;
           import java.util.List;
           import java.util.Map;
+          import java.util.Set;
 
           public class MainActivity extends Activity {
               static final String[] TAB_NAMES = {"القنوات", "الأفلام", "المسلسلات"};
               static final String[] TAB_EMOJI = {"📺", "🎬", "🎞️"};
               static final String KEY_ALL = "\u0000all";
               static final String KEY_NEW = "\u0000new";
+              static final String KEY_FAV = "\u0000fav";
+              static final String KEY_CW = "\u0000cw";
+              static final String KEY_HIDDEN = "\u0000hidden";
               static final int NEWEST_COUNT = 300;
 
-              // المستويات: الأقسام ← العناصر ← الحلقات
+              // المستويات: الأقسام ← العناصر ← الحلقات، وقائمة الأقسام المخفية
               static final int LV_GROUPS = 0;
               static final int LV_ITEMS = 1;
               static final int LV_EPISODES = 2;
+              static final int LV_HIDDEN = 3;
+
+              static boolean autoStartDone = false;
 
               TextView status;
               EditText search;
@@ -990,12 +1140,17 @@ jobs:
               ListView list;
               IconAdapter adapter;
               ImageView pvImage;
-              TextView pvEmoji, pvTitle, pvSub;
+              PlayerView pvVideo;
+              TextView pvEmoji, pvTitle, pvSub, pvEpg;
               final Button[] tabs = new Button[3];
 
               final List<IconAdapter.Row> rows = new ArrayList<>();
               final List<String> groupKeys = new ArrayList<>();
+              final List<String> hiddenList = new ArrayList<>();
               final List<Channel> shown = new ArrayList<>();
+              final List<Channel> visible = new ArrayList<>();
+              final Map<String, Channel> byKey = new HashMap<>();
+              final Set<String> favKeys = new HashSet<>();
               final Map<String, String> groupIcon = new HashMap<>();
               final Map<String, Integer> groupCount = new HashMap<>();
               final boolean[] loading = new boolean[3];
@@ -1003,17 +1158,25 @@ jobs:
               int section = Data.LIVE;
               int level = LV_GROUPS;
               int lastGroupPos = 0;
+              String currentKey = KEY_ALL;
               boolean searchMode = false;
               String itemsTitle = "";
-              // للرجوع من الحلقات للمسلسلات
               final List<Channel> savedItems = new ArrayList<>();
               String savedTitle = "";
               int savedPos = 0;
+
+              // المعاينة
+              ExoPlayer preview;
+              Channel previewCh;
+              List<MediaItem> previewTries = new ArrayList<>();
+              int previewTry = 0;
+              int epgToken = 0;
 
               String digits = "";
               final Handler ui = new Handler(Looper.getMainLooper());
               final Runnable searchRun = this::runSearch;
               final Runnable jumpRun = this::jumpToNumber;
+              final Runnable previewRun = this::startPreview;
 
               @Override
               protected void onCreate(Bundle b) {
@@ -1038,13 +1201,16 @@ jobs:
                   return btn;
               }
 
+              void toast(String s) {
+                  Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+              }
+
               void buildUi() {
                   LinearLayout root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
                   root.setBackgroundColor(0xFF101820);
                   root.setPadding(dp(24), dp(12), dp(24), dp(12));
 
-                  // الصف الأول: التبويبات + الأزرار
                   LinearLayout top = new LinearLayout(this);
                   top.setOrientation(LinearLayout.HORIZONTAL);
                   for (int i = 0; i < 3; i++) {
@@ -1056,12 +1222,11 @@ jobs:
                   }
                   top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
                   Button refresh = makeButton("تحديث");
-                  Button account = makeButton("تغيير الحساب");
+                  Button settings = makeButton("⚙  الإعدادات");
                   top.addView(refresh);
-                  top.addView(account);
+                  top.addView(settings);
                   root.addView(top);
 
-                  // البحث
                   search = new EditText(this);
                   search.setHint("🔍  اكتب للبحث...");
                   search.setSingleLine(true);
@@ -1078,7 +1243,6 @@ jobs:
                   status.setPadding(0, dp(4), 0, dp(8));
                   root.addView(status);
 
-                  // الجسم: القائمة يسار، والعرض يمين
                   LinearLayout body = new LinearLayout(this);
                   body.setOrientation(LinearLayout.HORIZONTAL);
                   body.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
@@ -1109,20 +1273,31 @@ jobs:
                   pvEmoji = new TextView(this);
                   pvEmoji.setTextSize(96);
                   pvEmoji.setGravity(Gravity.CENTER);
-                  pvBox.addView(pvImage, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  pvVideo = new PlayerView(this);
+                  pvVideo.setUseController(false);
+                  pvVideo.setVisibility(View.GONE);
+                  FrameLayout.LayoutParams fill = new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT);
+                  pvBox.addView(pvImage, fill);
                   pvBox.addView(pvEmoji, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  pvBox.addView(pvVideo, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                   right.addView(pvBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
                   pvTitle = new TextView(this);
                   pvTitle.setTextColor(Color.WHITE);
-                  pvTitle.setTextSize(28);
+                  pvTitle.setTextSize(26);
                   pvTitle.setGravity(Gravity.CENTER);
-                  pvTitle.setPadding(0, dp(16), 0, dp(8));
+                  pvTitle.setPadding(0, dp(12), 0, dp(6));
                   right.addView(pvTitle);
                   pvSub = new TextView(this);
                   pvSub.setTextColor(0xFFAABBCC);
-                  pvSub.setTextSize(18);
+                  pvSub.setTextSize(17);
                   pvSub.setGravity(Gravity.CENTER);
                   right.addView(pvSub);
+                  pvEpg = new TextView(this);
+                  pvEpg.setTextColor(0xFF93C5FD);
+                  pvEpg.setTextSize(18);
+                  pvEpg.setGravity(Gravity.CENTER);
+                  pvEpg.setPadding(0, dp(8), 0, 0);
+                  right.addView(pvEpg);
                   LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3);
                   rp.setMargins(dp(16), 0, 0, 0);
                   body.addView(right, rp);
@@ -1142,6 +1317,10 @@ jobs:
                       }
                   });
                   list.setOnItemClickListener((a, v, pos, id) -> openRow(pos));
+                  list.setOnItemLongClickListener((a, v, pos, id) -> {
+                      onLongPress(pos);
+                      return true;
+                  });
                   backBtn.setOnClickListener(v -> goBack());
 
                   search.addTextChangedListener(new TextWatcher() {
@@ -1169,7 +1348,7 @@ jobs:
                       Data.loaded[section] = false;
                       load(section);
                   });
-                  account.setOnClickListener(v -> startActivity(new Intent(MainActivity.this, LoginActivity.class)));
+                  settings.setOnClickListener(v -> startActivity(new Intent(MainActivity.this, SettingsActivity.class)));
 
                   setContentView(root);
               }
@@ -1183,7 +1362,6 @@ jobs:
                   return search.getText().toString().trim();
               }
 
-              // توحيد الحروف العربية عشان البحث يلقى الاسم مهما انكتب
               static String norm(String s) {
                   s = s.toLowerCase();
                   StringBuilder sb = new StringBuilder(s.length());
@@ -1206,6 +1384,7 @@ jobs:
               // ---------- التبويبات والتحميل ----------
 
               void switchSection(int sec) {
+                  stopPreview();
                   section = sec;
                   searchMode = false;
                   for (int i = 0; i < 3; i++) {
@@ -1219,7 +1398,6 @@ jobs:
                   adapter.notifyDataSetChanged();
                   backBtn.setVisibility(View.GONE);
                   level = LV_GROUPS;
-                  lastGroupPos = 0;
                   setPreview(null, TAB_EMOJI[sec], TAB_NAMES[sec], "");
                   if (Data.loaded[sec]) onDataReady();
                   else load(sec);
@@ -1246,36 +1424,86 @@ jobs:
                           final String msg = e.getMessage();
                           ui.post(() -> {
                               loading[sec] = false;
-                              if (sec == section) status.setText("تعذر التحميل: " + msg + " — اضغط تحديث أو غيّر الحساب");
+                              if (sec == section) status.setText("تعذر التحميل: " + msg + " — اضغط تحديث أو غيّر الحساب من الإعدادات");
                           });
                       }
                   }).start();
               }
 
-              void onDataReady() {
+              void refreshVisible() {
+                  Set<String> hid = Store.hidden(this, section);
+                  visible.clear();
+                  byKey.clear();
                   groupIcon.clear();
                   groupCount.clear();
                   for (Channel ch : Data.items.get(section)) {
+                      byKey.put(Store.keyOf(ch), ch);
+                      if (hid.contains(ch.group)) continue;
+                      visible.add(ch);
                       Integer c = groupCount.get(ch.group);
                       groupCount.put(ch.group, c == null ? 1 : c + 1);
                       if (!groupIcon.containsKey(ch.group) && ch.logo != null && !ch.logo.isEmpty()) {
                           groupIcon.put(ch.group, ch.logo);
                       }
                   }
+                  favKeys.clear();
+                  for (Channel f : Store.favs(this, section)) favKeys.add(Store.keyOf(f));
+              }
+
+              void rebuildGroupKeys() {
                   groupKeys.clear();
+                  if (section != Data.LIVE && !Store.cw(this, section).isEmpty()) groupKeys.add(KEY_CW);
+                  if (!favKeys.isEmpty()) groupKeys.add(KEY_FAV);
                   groupKeys.add(KEY_ALL);
                   if (section != Data.LIVE) groupKeys.add(KEY_NEW);
-                  groupKeys.addAll(Data.groups.get(section));
-                  lastGroupPos = section == Data.LIVE ? 0 : 1;
+                  Set<String> hid = Store.hidden(this, section);
+                  for (String g : Data.groups.get(section)) if (!hid.contains(g)) groupKeys.add(g);
+                  if (!hid.isEmpty()) groupKeys.add(KEY_HIDDEN);
+              }
+
+              void onDataReady() {
+                  refreshVisible();
+                  rebuildGroupKeys();
+                  String def;
+                  if (section == Data.LIVE) def = favKeys.isEmpty() ? KEY_ALL : KEY_FAV;
+                  else def = groupKeys.contains(KEY_CW) ? KEY_CW : KEY_NEW;
+                  lastGroupPos = Math.max(0, groupKeys.indexOf(def));
                   showGroups();
                   list.requestFocus();
+                  if (section == Data.LIVE) maybeAutoPlay();
+              }
+
+              // يفتح آخر قناة كنت عليها
+              void maybeAutoPlay() {
+                  if (autoStartDone) return;
+                  autoStartDone = true;
+                  if (!Store.opt(this, "resume_last", true)) return;
+                  Channel last = Store.lastLive(this);
+                  if (last == null) return;
+                  Channel cur = byKey.get(Store.keyOf(last));
+                  if (cur == null || !visible.contains(cur)) return;
+                  int gi = groupKeys.indexOf(cur.group);
+                  List<Channel> target;
+                  if (gi >= 0) {
+                      openGroup(gi);
+                      target = new ArrayList<>(shown);
+                  } else {
+                      target = new ArrayList<>(visible);
+                  }
+                  int idx = target.indexOf(cur);
+                  if (idx < 0) return;
+                  if (gi >= 0) list.setSelection(idx);
+                  play(target, idx, false, false);
               }
 
               // ---------- العرض ----------
 
               String groupLabel(String key) {
-                  if (KEY_ALL.equals(key)) return "الكل (" + Data.items.get(section).size() + ")";
+                  if (KEY_ALL.equals(key)) return "الكل (" + visible.size() + ")";
                   if (KEY_NEW.equals(key)) return "الأحدث";
+                  if (KEY_FAV.equals(key)) return "المفضلة (" + favKeys.size() + ")";
+                  if (KEY_CW.equals(key)) return "أكمل المشاهدة";
+                  if (KEY_HIDDEN.equals(key)) return "الأقسام المخفية (" + Store.hidden(this, section).size() + ")";
                   Integer c = groupCount.get(key);
                   return key + "  (" + (c == null ? 0 : c) + ")";
               }
@@ -1283,6 +1511,9 @@ jobs:
               IconAdapter.Row groupRow(String key) {
                   if (KEY_ALL.equals(key)) return new IconAdapter.Row(groupLabel(key), null, TAB_EMOJI[section]);
                   if (KEY_NEW.equals(key)) return new IconAdapter.Row(groupLabel(key), null, "🆕");
+                  if (KEY_FAV.equals(key)) return new IconAdapter.Row(groupLabel(key), null, "⭐");
+                  if (KEY_CW.equals(key)) return new IconAdapter.Row(groupLabel(key), null, "▶️");
+                  if (KEY_HIDDEN.equals(key)) return new IconAdapter.Row(groupLabel(key), null, "🙈");
                   String flag = Flags.find(key);
                   if (flag != null) return new IconAdapter.Row(groupLabel(key), null, flag);
                   return new IconAdapter.Row(groupLabel(key), groupIcon.get(key), TAB_EMOJI[section]);
@@ -1298,8 +1529,8 @@ jobs:
                   int pos = Math.min(lastGroupPos, Math.max(0, rows.size() - 1));
                   list.setSelection(pos);
                   updatePreview(pos);
-                  status.setText(TAB_NAMES[section] + "  •  " + Data.groups.get(section).size() + " قسم  •  "
-                          + Data.items.get(section).size() + (section == Data.LIVE ? " قناة  •  اكتب رقم القناة بالريموت للانتقال لها" : ""));
+                  status.setText(TAB_NAMES[section] + "  •  " + Data.groups.get(section).size() + " قسم  •  " + visible.size()
+                          + "  •  ضغطة طويلة على أي شي للخيارات");
               }
 
               void showItems(int lvl, String title, boolean focus) {
@@ -1308,9 +1539,13 @@ jobs:
                   backBtn.setVisibility(View.VISIBLE);
                   backBtn.setText(lvl == LV_EPISODES ? "⬅  رجوع للمسلسلات" : (searchMode ? "⬅  إلغاء البحث" : "⬅  رجوع للأقسام"));
                   rows.clear();
+                  boolean cwSeries = KEY_CW.equals(currentKey) && section == Data.SERIES && lvl == LV_ITEMS && !searchMode;
                   for (int i = 0; i < shown.size(); i++) {
                       Channel ch = shown.get(i);
-                      String text = (section == Data.LIVE && lvl == LV_ITEMS) ? (i + 1) + ".  " + ch.name : ch.name;
+                      String text = ch.name;
+                      if (cwSeries && ch.group != null) text = ch.group + "  •  " + ch.name;
+                      if (section == Data.LIVE && lvl == LV_ITEMS) text = (i + 1) + ".  " + text;
+                      if (lvl == LV_ITEMS && favKeys.contains(Store.keyOf(ch))) text = text + "  ⭐";
                       rows.add(new IconAdapter.Row(text, ch.logo, lvl == LV_EPISODES ? "▶" : TAB_EMOJI[section]));
                   }
                   adapter.notifyDataSetChanged();
@@ -1318,6 +1553,32 @@ jobs:
                   updatePreview(0);
                   status.setText(title + "  •  " + shown.size());
                   if (focus) list.requestFocus();
+              }
+
+              void showHidden() {
+                  level = LV_HIDDEN;
+                  hiddenList.clear();
+                  hiddenList.addAll(Store.hidden(this, section));
+                  Collections.sort(hiddenList);
+                  backBtn.setVisibility(View.VISIBLE);
+                  backBtn.setText("⬅  رجوع للأقسام");
+                  rows.clear();
+                  for (String g : hiddenList) {
+                      String flag = Flags.find(g);
+                      rows.add(new IconAdapter.Row(g, flag == null ? groupIconAll(g) : null, flag == null ? "🙈" : flag));
+                  }
+                  adapter.notifyDataSetChanged();
+                  list.setSelection(0);
+                  updatePreview(0);
+                  status.setText("اضغط OK على أي قسم عشان يرجع يطلع");
+                  list.requestFocus();
+              }
+
+              String groupIconAll(String g) {
+                  for (Channel ch : Data.items.get(section)) {
+                      if (g.equals(ch.group) && ch.logo != null && !ch.logo.isEmpty()) return ch.logo;
+                  }
+                  return null;
               }
 
               void setPreview(String img, String emoji, String title, String sub) {
@@ -1337,49 +1598,186 @@ jobs:
               }
 
               void updatePreview(int pos) {
-                  if (pos < 0 || pos >= rows.size()) return;
-                  if (level == LV_GROUPS) {
+                  epgToken++;
+                  pvEpg.setText("");
+                  if (pos < 0 || pos >= rows.size()) {
+                      stopPreview();
+                      return;
+                  }
+                  if (level == LV_GROUPS || level == LV_HIDDEN) {
+                      stopPreview();
                       IconAdapter.Row r = rows.get(pos);
-                      setPreview(r.icon, r.emoji, r.text, "اضغط OK لفتح القسم");
-                  } else if (pos < shown.size()) {
-                      Channel ch = shown.get(pos);
-                      String sub;
-                      if (level == LV_EPISODES) sub = savedTitle;
-                      else if (section == Data.LIVE) sub = "قناة رقم " + (pos + 1) + "  •  " + ch.group;
-                      else if (section == Data.SERIES) sub = ch.group + "  •  اضغط OK لعرض الحلقات";
-                      else sub = ch.group;
-                      setPreview(ch.logo, level == LV_EPISODES ? "▶" : TAB_EMOJI[section], ch.name, sub);
+                      setPreview(r.icon, r.emoji, r.text, level == LV_GROUPS ? "اضغط OK لفتح القسم" : "اضغط OK لإظهار القسم");
+                      return;
+                  }
+                  if (pos >= shown.size()) return;
+                  Channel ch = shown.get(pos);
+                  String sub;
+                  if (level == LV_EPISODES) sub = savedTitle;
+                  else if (section == Data.LIVE) sub = "قناة رقم " + (pos + 1) + "  •  " + ch.group;
+                  else if (section == Data.SERIES && !KEY_CW.equals(currentKey)) sub = ch.group + "  •  اضغط OK لعرض الحلقات";
+                  else sub = ch.group == null ? "" : ch.group;
+                  long saved = Store.getPos(this, ch.url);
+                  if (section != Data.LIVE && saved > 30000) sub = sub + "\nوقفت عند " + PlayerActivity.fmt(saved);
+                  setPreview(ch.logo, level == LV_EPISODES ? "▶" : TAB_EMOJI[section], ch.name, sub);
+                  if (section == Data.LIVE) {
+                      schedulePreview(ch);
+                      loadEpg(ch);
+                  } else {
+                      stopPreview();
                   }
               }
 
+              // ---------- المعاينة ودليل البرامج ----------
+
+              void schedulePreview(Channel ch) {
+                  ui.removeCallbacks(previewRun);
+                  if (!Store.opt(this, "preview", true)) {
+                      stopPreview();
+                      return;
+                  }
+                  if (ch == previewCh && pvVideo.getVisibility() == View.VISIBLE) return;
+                  stopPreview();
+                  previewCh = ch;
+                  ui.postDelayed(previewRun, 900);
+              }
+
+              void startPreview() {
+                  if (previewCh == null || isFinishing()) return;
+                  if (preview == null) {
+                      preview = Players.create(this);
+                      preview.addListener(new Player.Listener() {
+                          @Override
+                          public void onPlayerError(PlaybackException e) {
+                              previewTry++;
+                              if (preview != null && previewTry < previewTries.size()) {
+                                  preview.setMediaItem(previewTries.get(previewTry));
+                                  preview.prepare();
+                                  preview.play();
+                              } else {
+                                  pvVideo.setVisibility(View.GONE);
+                              }
+                          }
+                      });
+                      pvVideo.setPlayer(preview);
+                  }
+                  previewTries = Players.tries(previewCh, false);
+                  previewTry = 0;
+                  pvVideo.setVisibility(View.VISIBLE);
+                  preview.setMediaItem(previewTries.get(0));
+                  preview.prepare();
+                  preview.play();
+              }
+
+              void stopPreview() {
+                  ui.removeCallbacks(previewRun);
+                  previewCh = null;
+                  if (preview != null) {
+                      preview.stop();
+                      preview.clearMediaItems();
+                  }
+                  if (pvVideo != null) pvVideo.setVisibility(View.GONE);
+              }
+
+              void releasePreview() {
+                  stopPreview();
+                  if (preview != null) {
+                      pvVideo.setPlayer(null);
+                      preview.release();
+                      preview = null;
+                  }
+              }
+
+              void loadEpg(final Channel ch) {
+                  final int tok = epgToken;
+                  final Account acc = Account.read(this);
+                  ui.postDelayed(() -> {
+                      if (tok != epgToken) return;
+                      new Thread(() -> {
+                          String t;
+                          try {
+                              t = Epg.nowNext(acc, ch);
+                          } catch (Exception e) {
+                              t = "";
+                          }
+                          final String fin = t;
+                          ui.post(() -> {
+                              if (tok == epgToken) pvEpg.setText(fin);
+                          });
+                      }).start();
+                  }, 500);
+              }
+
               // ---------- التنقل ----------
+
+              List<Channel> itemsFor(String key) {
+                  List<Channel> out = new ArrayList<>();
+                  if (KEY_ALL.equals(key)) {
+                      out.addAll(visible);
+                  } else if (KEY_NEW.equals(key)) {
+                      List<Channel> tmp = new ArrayList<>(visible);
+                      Collections.sort(tmp, (a, b) -> Long.compare(b.added, a.added));
+                      out.addAll(tmp.subList(0, Math.min(NEWEST_COUNT, tmp.size())));
+                  } else if (KEY_FAV.equals(key)) {
+                      for (Channel f : Store.favs(this, section)) {
+                          Channel cur = byKey.get(Store.keyOf(f));
+                          out.add(cur != null ? cur : f);
+                      }
+                  } else if (KEY_CW.equals(key)) {
+                      out.addAll(Store.cw(this, section));
+                  } else {
+                      for (Channel ch : visible) if (key.equals(ch.group)) out.add(ch);
+                  }
+                  return out;
+              }
 
               void openRow(int pos) {
                   if (pos < 0 || pos >= rows.size()) return;
                   if (level == LV_GROUPS) {
                       openGroup(pos);
-                  } else if (level == LV_ITEMS && section == Data.SERIES) {
+                  } else if (level == LV_HIDDEN) {
+                      String g = hiddenList.get(pos);
+                      Store.setHidden(this, section, g, false);
+                      toast("رجع القسم: " + g);
+                      refreshVisible();
+                      rebuildGroupKeys();
+                      if (Store.hidden(this, section).isEmpty()) showGroups();
+                      else showHidden();
+                  } else if (level == LV_ITEMS && section == Data.SERIES && !KEY_CW.equals(currentKey)) {
                       openSeries(pos);
+                  } else if (level == LV_ITEMS && section == Data.SERIES) {
+                      playEpisodeFromCw(shown.get(pos));
                   } else {
-                      play(shown, pos, section != Data.LIVE);
+                      play(shown, pos, section != Data.LIVE, level == LV_EPISODES);
                   }
               }
 
               void openGroup(int pos) {
                   lastGroupPos = pos;
                   String key = groupKeys.get(pos);
-                  List<Channel> src = Data.items.get(section);
-                  shown.clear();
-                  if (KEY_ALL.equals(key)) {
-                      shown.addAll(src);
-                  } else if (KEY_NEW.equals(key)) {
-                      List<Channel> tmp = new ArrayList<>(src);
-                      Collections.sort(tmp, (a, b) -> Long.compare(b.added, a.added));
-                      shown.addAll(tmp.subList(0, Math.min(NEWEST_COUNT, tmp.size())));
-                  } else {
-                      for (Channel ch : src) if (key.equals(ch.group)) shown.add(ch);
+                  if (KEY_HIDDEN.equals(key)) {
+                      showHidden();
+                      return;
                   }
+                  currentKey = key;
+                  shown.clear();
+                  shown.addAll(itemsFor(key));
                   showItems(LV_ITEMS, groupLabel(key), true);
+              }
+
+              void reopenCurrent(int sel) {
+                  shown.clear();
+                  shown.addAll(itemsFor(currentKey));
+                  if (shown.isEmpty()) {
+                      lastGroupPos = Math.max(0, groupKeys.indexOf(KEY_ALL));
+                      showGroups();
+                      list.requestFocus();
+                      return;
+                  }
+                  showItems(LV_ITEMS, groupLabel(currentKey), true);
+                  int s = Math.max(0, Math.min(sel, shown.size() - 1));
+                  list.setSelection(s);
+                  updatePreview(s);
               }
 
               void openSeries(final int pos) {
@@ -1396,7 +1794,10 @@ jobs:
                               savedItems.addAll(shown);
                               savedTitle = series.name;
                               savedPos = pos;
-                              for (Channel e : eps) if (e.logo == null || e.logo.isEmpty()) e.logo = series.logo;
+                              for (Channel e : eps) {
+                                  if (e.logo == null || e.logo.isEmpty()) e.logo = series.logo;
+                                  e.group = series.name;
+                              }
                               shown.clear();
                               shown.addAll(eps);
                               showItems(LV_EPISODES, series.name, true);
@@ -1408,19 +1809,59 @@ jobs:
                   }).start();
               }
 
+              // يكمل الحلقة من «أكمل المشاهدة» ومعها باقي حلقات المسلسل عشان «الحلقة التالية» تشتغل
+              void playEpisodeFromCw(final Channel ep) {
+                  if (ep.seriesId == null) {
+                      List<Channel> one = new ArrayList<>();
+                      one.add(ep);
+                      play(one, 0, true, false);
+                      return;
+                  }
+                  status.setText("جاري التحميل...");
+                  final Account acc = Account.read(this);
+                  new Thread(() -> {
+                      List<Channel> eps;
+                      try {
+                          eps = Loader.loadEpisodes(acc, ep.seriesId);
+                      } catch (Exception e) {
+                          eps = new ArrayList<>();
+                      }
+                      final List<Channel> fin = eps;
+                      ui.post(() -> {
+                          int idx = -1;
+                          for (int i = 0; i < fin.size(); i++) {
+                              Channel e = fin.get(i);
+                              e.group = ep.group;
+                              if (e.logo == null || e.logo.isEmpty()) e.logo = ep.logo;
+                              if (e.url != null && e.url.equals(ep.url)) idx = i;
+                          }
+                          status.setText(itemsTitle + "  •  " + shown.size());
+                          if (idx < 0) {
+                              List<Channel> one = new ArrayList<>();
+                              one.add(ep);
+                              play(one, 0, true, false);
+                          } else {
+                              play(fin, idx, true, true);
+                          }
+                      });
+                  }).start();
+              }
+
               void goBack() {
                   if (level == LV_EPISODES) {
                       shown.clear();
                       shown.addAll(savedItems);
-                      String t = searchMode ? "نتائج البحث" : groupLabel(groupKeys.get(lastGroupPos));
+                      String t = searchMode ? "نتائج البحث" : groupLabel(currentKey);
                       showItems(LV_ITEMS, t, true);
                       list.setSelection(savedPos);
                       updatePreview(savedPos);
-                  } else if (level == LV_ITEMS) {
+                  } else if (level == LV_ITEMS || level == LV_HIDDEN) {
                       if (searchMode) {
                           searchMode = false;
                           search.setText("");
                       }
+                      int i = groupKeys.indexOf(level == LV_HIDDEN ? KEY_HIDDEN : currentKey);
+                      if (i >= 0) lastGroupPos = i;
                       showGroups();
                       list.requestFocus();
                   } else {
@@ -1437,7 +1878,7 @@ jobs:
                   }
                   String[] words = q.split("\\s+");
                   shown.clear();
-                  for (Channel ch : Data.items.get(section)) {
+                  for (Channel ch : visible) {
                       String n = norm(ch.name);
                       boolean ok = true;
                       for (String w : words) {
@@ -1449,30 +1890,136 @@ jobs:
                       if (ok) shown.add(ch);
                   }
                   searchMode = true;
+                  currentKey = KEY_ALL;
                   showItems(LV_ITEMS, "نتائج البحث", false);
               }
 
-              void play(List<Channel> src, int pos, boolean vod) {
+              // ---------- الضغطة الطويلة ----------
+
+              void onLongPress(final int pos) {
+                  if (level == LV_GROUPS) {
+                      final String key = groupKeys.get(pos);
+                      if (key.startsWith("\u0000")) return;
+                      new AlertDialog.Builder(this)
+                              .setTitle(key)
+                              .setItems(new String[]{"🙈  إخفاء هذا القسم"}, (d, w) -> {
+                                  Store.setHidden(this, section, key, true);
+                                  refreshVisible();
+                                  rebuildGroupKeys();
+                                  lastGroupPos = Math.min(pos, groupKeys.size() - 1);
+                                  showGroups();
+                                  toast("انخفى القسم — ترجعه من «الأقسام المخفية» تحت");
+                              })
+                              .show();
+                      return;
+                  }
+                  if (level != LV_ITEMS || pos >= shown.size()) return;
+                  final Channel ch = shown.get(pos);
+                  List<String> opts = new ArrayList<>();
+                  final List<Runnable> acts = new ArrayList<>();
+                  if (KEY_CW.equals(currentKey) && !searchMode) {
+                      opts.add("✖  إزالة من «أكمل المشاهدة»");
+                      acts.add(() -> {
+                          Store.removeCw(this, section, ch.url);
+                          Store.setPos(this, ch.url, 0);
+                          rebuildGroupKeys();
+                          reopenCurrent(pos);
+                      });
+                  } else if (!favKeys.contains(Store.keyOf(ch))) {
+                      opts.add("⭐  إضافة للمفضلة");
+                      acts.add(() -> {
+                          Store.addFav(this, section, ch);
+                          afterFavChange(pos);
+                          toast("انضافت للمفضلة");
+                      });
+                  } else {
+                      opts.add("✖  إزالة من المفضلة");
+                      acts.add(() -> {
+                          Store.removeFav(this, section, ch);
+                          afterFavChange(pos);
+                      });
+                      if (KEY_FAV.equals(currentKey) && !searchMode) {
+                          if (pos > 0) {
+                              opts.add("⬆  تحريك لفوق");
+                              acts.add(() -> {
+                                  Store.moveFav(this, section, pos, pos - 1);
+                                  reopenCurrent(pos - 1);
+                              });
+                          }
+                          if (pos < shown.size() - 1) {
+                              opts.add("⬇  تحريك لتحت");
+                              acts.add(() -> {
+                                  Store.moveFav(this, section, pos, pos + 1);
+                                  reopenCurrent(pos + 1);
+                              });
+                          }
+                      }
+                  }
+                  new AlertDialog.Builder(this)
+                          .setTitle(ch.name)
+                          .setItems(opts.toArray(new String[0]), (d, w) -> acts.get(w).run())
+                          .show();
+              }
+
+              void afterFavChange(int pos) {
+                  favKeys.clear();
+                  for (Channel f : Store.favs(this, section)) favKeys.add(Store.keyOf(f));
+                  rebuildGroupKeys();
+                  if (KEY_FAV.equals(currentKey) && !searchMode) {
+                      reopenCurrent(pos);
+                  } else {
+                      showItems(LV_ITEMS, itemsTitle, true);
+                      list.setSelection(pos);
+                      updatePreview(pos);
+                  }
+              }
+
+              // ---------- التشغيل ----------
+
+              void play(List<Channel> src, int pos, boolean vod, boolean series) {
+                  releasePreview();
                   Data.current.clear();
                   Data.current.addAll(src);
                   Intent i = new Intent(this, PlayerActivity.class);
                   i.putExtra("index", pos);
                   i.putExtra("vod", vod);
+                  i.putExtra("series", series);
+                  i.putExtra("section", section);
                   startActivity(i);
               }
 
-              // كتابة رقم القناة بالريموت مثل الرسيفر
               void jumpToNumber() {
                   int n = (int) Loader.num(digits);
                   digits = "";
                   if (section != Data.LIVE) return;
-                  List<Channel> target = (level == LV_ITEMS && !searchMode) ? shown : Data.items.get(Data.LIVE);
+                  List<Channel> target = (level == LV_ITEMS && !searchMode) ? shown : visible;
                   if (n >= 1 && n <= target.size()) {
                       if (target == shown) list.setSelection(n - 1);
-                      play(new ArrayList<>(target), n - 1, false);
+                      play(new ArrayList<>(target), n - 1, false, false);
                   } else {
                       status.setText("ما فيه قناة بهالرقم");
                   }
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  if (adapter == null || !Data.loaded[section]) return;
+                  refreshVisible();
+                  rebuildGroupKeys();
+                  if (level == LV_GROUPS) {
+                      showGroups();
+                  } else if (level == LV_ITEMS && KEY_CW.equals(currentKey) && !searchMode) {
+                      reopenCurrent(list.getSelectedItemPosition());
+                  } else {
+                      updatePreview(list.getSelectedItemPosition());
+                  }
+              }
+
+              @Override
+              protected void onStop() {
+                  super.onStop();
+                  releasePreview();
               }
 
               @Override
@@ -1487,6 +2034,11 @@ jobs:
                   }
                   if (!typing && keyCode == KeyEvent.KEYCODE_SEARCH) {
                       search.requestFocus();
+                      return true;
+                  }
+                  if (!typing && keyCode == KeyEvent.KEYCODE_MENU) {
+                      int p = list.getSelectedItemPosition();
+                      if (p >= 0) onLongPress(p);
                       return true;
                   }
                   return super.onKeyDown(keyCode, e);
@@ -1511,6 +2063,7 @@ jobs:
           package com.my.iptv;
 
           import android.app.Activity;
+          import android.app.AlertDialog;
           import android.graphics.Color;
           import android.os.Bundle;
           import android.os.Handler;
@@ -1521,19 +2074,22 @@ jobs:
           import android.view.WindowManager;
           import android.widget.FrameLayout;
           import android.widget.TextView;
+          import android.widget.Toast;
 
+          import androidx.media3.common.C;
+          import androidx.media3.common.Format;
           import androidx.media3.common.MediaItem;
-          import androidx.media3.common.MimeTypes;
           import androidx.media3.common.PlaybackException;
           import androidx.media3.common.Player;
-          import androidx.media3.datasource.DefaultDataSource;
-          import androidx.media3.datasource.DefaultHttpDataSource;
+          import androidx.media3.common.TrackGroup;
+          import androidx.media3.common.TrackSelectionOverride;
+          import androidx.media3.common.Tracks;
           import androidx.media3.exoplayer.ExoPlayer;
-          import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
           import androidx.media3.ui.PlayerView;
 
           import java.util.ArrayList;
           import java.util.List;
+          import java.util.Locale;
 
           public class PlayerActivity extends Activity {
               ExoPlayer player;
@@ -1541,13 +2097,25 @@ jobs:
               TextView info;
               int index;
               boolean vod;
+              boolean series;
+              int section;
               String digits = "";
               int lastHandled = -1;
-              final List<MediaItem> tries = new ArrayList<>();
+              int infoToken = 0;
+              List<MediaItem> tries = new ArrayList<>();
               int tryIndex;
+              long startPos = 0;
               final Handler h = new Handler(Looper.getMainLooper());
               final Runnable hideInfo = () -> info.setVisibility(View.GONE);
               final Runnable jumpRun = this::jumpToNumber;
+              final Runnable nextRun = () -> play(index + 1);
+              final Runnable saveRun = new Runnable() {
+                  @Override
+                  public void run() {
+                      savePos();
+                      h.postDelayed(this, 10000);
+                  }
+              };
 
               @Override
               protected void onCreate(Bundle b) {
@@ -1559,6 +2127,8 @@ jobs:
                   }
                   index = getIntent().getIntExtra("index", 0);
                   vod = getIntent().getBooleanExtra("vod", false);
+                  series = getIntent().getBooleanExtra("series", false);
+                  section = getIntent().getIntExtra("section", Data.LIVE);
 
                   FrameLayout root = new FrameLayout(this);
                   root.setBackgroundColor(Color.BLACK);
@@ -1569,7 +2139,7 @@ jobs:
                           FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                   info = new TextView(this);
                   info.setTextColor(Color.WHITE);
-                  info.setTextSize(26);
+                  info.setTextSize(24);
                   info.setBackgroundColor(0xCC000000);
                   info.setPadding(40, 24, 40, 24);
                   FrameLayout.LayoutParams lp = new FrameLayout.LayoutParams(
@@ -1579,17 +2149,7 @@ jobs:
                   root.addView(info, lp);
                   setContentView(root);
 
-                  DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
-                          .setUserAgent(Loader.UA)
-                          .setAllowCrossProtocolRedirects(true)
-                          .setConnectTimeoutMs(20000)
-                          .setReadTimeoutMs(30000);
-                  player = new ExoPlayer.Builder(this)
-                          .setMediaSourceFactory(new DefaultMediaSourceFactory(this)
-                                  .setDataSourceFactory(new DefaultDataSource.Factory(this, http)))
-                          .setSeekBackIncrementMs(10000)
-                          .setSeekForwardIncrementMs(30000)
-                          .build();
+                  player = Players.create(this);
                   view.setPlayer(player);
                   player.addListener(new Player.Listener() {
                       @Override
@@ -1606,8 +2166,14 @@ jobs:
                               showInfo("تعذر التشغيل: " + current().name, 6000);
                           }
                       }
+
+                      @Override
+                      public void onPlaybackStateChanged(int state) {
+                          if (state == Player.STATE_ENDED && vod) onEnded();
+                      }
                   });
                   play(index);
+                  if (vod) h.postDelayed(saveRun, 10000);
               }
 
               Channel current() {
@@ -1616,23 +2182,83 @@ jobs:
 
               void play(int i) {
                   int n = Data.current.size();
-                  index = ((i % n) + n) % n;
-                  Channel c = current();
-                  tries.clear();
-                  tries.add(MediaItem.fromUri(c.url));
-                  if (c.altUrl != null) tries.add(MediaItem.fromUri(c.altUrl));
-                  if (!vod && !c.url.contains(".m3u8")) {
-                      tries.add(new MediaItem.Builder().setUri(c.url).setMimeType(MimeTypes.APPLICATION_M3U8).build());
+                  h.removeCallbacks(nextRun);
+                  if (vod) {
+                      if (i < 0 || i >= n) return;
+                      index = i;
+                  } else {
+                      index = ((i % n) + n) % n;
                   }
+                  final Channel c = current();
+                  tries = Players.tries(c, vod);
                   tryIndex = 0;
-                  startTry();
-                  showInfo(vod ? c.name : (index + 1) + ".  " + c.name, 3000);
+                  if (!vod) {
+                      Store.setLastLive(this, c);
+                      startPos = 0;
+                      startTry();
+                      showLiveInfo();
+                      return;
+                  }
+                  Store.touchCw(this, section, c);
+                  final long saved = Store.getPos(this, c.url);
+                  if (saved > 30000) {
+                      player.stop();
+                      new AlertDialog.Builder(this)
+                              .setTitle(c.name)
+                              .setItems(new String[]{"▶  أكمل من " + fmt(saved), "⏮  من البداية"}, (d, w) -> {
+                                  startPos = w == 0 ? saved : 0;
+                                  startTry();
+                                  showInfo(c.name, 3000);
+                              })
+                              .setOnCancelListener(d -> finish())
+                              .show();
+                  } else {
+                      startPos = 0;
+                      startTry();
+                      showInfo(c.name, 3000);
+                  }
               }
 
               void startTry() {
-                  player.setMediaItem(tries.get(tryIndex));
+                  MediaItem it = tries.get(tryIndex);
+                  if (tryIndex == 0 && startPos > 0) player.setMediaItem(it, startPos);
+                  else player.setMediaItem(it);
                   player.prepare();
                   player.play();
+              }
+
+              static String fmt(long ms) {
+                  long s = ms / 1000;
+                  long hh = s / 3600, mm = (s % 3600) / 60, ss = s % 60;
+                  return hh > 0 ? String.format(Locale.US, "%d:%02d:%02d", hh, mm, ss)
+                          : String.format(Locale.US, "%d:%02d", mm, ss);
+              }
+
+              void savePos() {
+                  if (!vod || player == null || Data.current.isEmpty()) return;
+                  long d = player.getDuration();
+                  long p = player.getCurrentPosition();
+                  Channel c = current();
+                  if (d > 0 && p > d * 0.95) {
+                      Store.setPos(this, c.url, 0);
+                      Store.removeCw(this, section, c.url);
+                  } else if (p > 5000) {
+                      Store.setPos(this, c.url, p);
+                  }
+              }
+
+              void onEnded() {
+                  Channel c = current();
+                  Store.setPos(this, c.url, 0);
+                  Store.removeCw(this, section, c.url);
+                  if (series && index + 1 < Data.current.size()) {
+                      showInfo("⏭  الحلقة التالية بعد ٥ ثواني:\n" + Data.current.get(index + 1).name
+                              + "\nاضغط رجوع للإلغاء", 5500);
+                      h.postDelayed(nextRun, 5000);
+                  } else {
+                      showInfo("انتهى ✓", 2000);
+                      h.postDelayed(() -> finish(), 2000);
+                  }
               }
 
               void showInfo(String text, long ms) {
@@ -1642,6 +2268,28 @@ jobs:
                   h.postDelayed(hideInfo, ms);
               }
 
+              // اسم القناة + دليل البرامج
+              void showLiveInfo() {
+                  final Channel c = current();
+                  final String base = (index + 1) + ".  " + c.name;
+                  showInfo(base, 5000);
+                  final int tok = ++infoToken;
+                  final Account acc = Account.read(this);
+                  new Thread(() -> {
+                      String e = "";
+                      try {
+                          e = Epg.nowNext(acc, c);
+                      } catch (Exception ignored) {
+                      }
+                      final String fin = e;
+                      if (!fin.isEmpty()) {
+                          h.post(() -> {
+                              if (tok == infoToken && info.getVisibility() == View.VISIBLE) info.setText(base + "\n" + fin);
+                          });
+                      }
+                  }).start();
+              }
+
               void jumpToNumber() {
                   int n = (int) Loader.num(digits);
                   digits = "";
@@ -1649,6 +2297,50 @@ jobs:
                   else showInfo("ما فيه قناة بهالرقم", 2000);
               }
 
+              // ---------- الصوت والترجمة ----------
+              static String trackName(Format f) {
+                  String lang = f.language;
+                  String langName = "";
+                  if (lang != null && !lang.isEmpty() && !lang.equals("und")) {
+                      langName = new Locale(lang).getDisplayLanguage(new Locale("ar"));
+                  }
+                  String label = f.label == null ? "" : f.label;
+                  if (!label.isEmpty() && !langName.isEmpty() && !label.equals(langName)) return label + " (" + langName + ")";
+                  if (!label.isEmpty()) return label;
+                  if (!langName.isEmpty()) return langName;
+                  return "بدون اسم";
+              }
+
+              void showTracks() {
+                  List<String> labels = new ArrayList<>();
+                  List<Runnable> actions = new ArrayList<>();
+                  for (Tracks.Group g : player.getCurrentTracks().getGroups()) {
+                      final int type = g.getType();
+                      if (type != C.TRACK_TYPE_AUDIO && type != C.TRACK_TYPE_TEXT) continue;
+                      final TrackGroup tg = g.getMediaTrackGroup();
+                      for (int i = 0; i < g.length; i++) {
+                          if (!g.isTrackSupported(i)) continue;
+                          final int idx = i;
+                          String prefix = type == C.TRACK_TYPE_AUDIO ? "🔊  الصوت: " : "💬  الترجمة: ";
+                          labels.add(prefix + trackName(g.getTrackFormat(i)) + (g.isTrackSelected(i) ? "  ✓" : ""));
+                          actions.add(() -> player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                                  .setTrackTypeDisabled(type, false)
+                                  .setOverrideForType(new TrackSelectionOverride(tg, idx))
+                                  .build()));
+                      }
+                  }
+                  labels.add("🚫  إيقاف الترجمة");
+                  actions.add(() -> player.setTrackSelectionParameters(player.getTrackSelectionParameters().buildUpon()
+                          .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+                          .build()));
+                  if (labels.size() == 1) Toast.makeText(this, "ما فيه ترجمة أو صوت ثاني لهذا الفيديو", Toast.LENGTH_SHORT).show();
+                  new AlertDialog.Builder(this)
+                          .setTitle("الصوت والترجمة")
+                          .setItems(labels.toArray(new String[0]), (d, w) -> actions.get(w).run())
+                          .show();
+              }
+
+              // ---------- الريموت ----------
               boolean handleVodKey(int code) {
                   switch (code) {
                       case KeyEvent.KEYCODE_DPAD_LEFT:
@@ -1674,8 +2366,19 @@ jobs:
                           player.pause();
                           return true;
                       case KeyEvent.KEYCODE_DPAD_UP:
+                      case KeyEvent.KEYCODE_MENU:
+                      case KeyEvent.KEYCODE_CAPTIONS:
+                          showTracks();
+                          return true;
                       case KeyEvent.KEYCODE_DPAD_DOWN:
                           view.showController();
+                          showInfo(current().name + "\n⬆ الصوت والترجمة  •  ⬅➡ تقديم وترجيع", 3000);
+                          return true;
+                      case KeyEvent.KEYCODE_MEDIA_NEXT:
+                          if (series) {
+                              savePos();
+                              play(index + 1);
+                          }
                           return true;
                   }
                   return false;
@@ -1700,7 +2403,8 @@ jobs:
                           return true;
                       case KeyEvent.KEYCODE_DPAD_CENTER:
                       case KeyEvent.KEYCODE_ENTER:
-                          showInfo((index + 1) + ".  " + current().name, 3000);
+                      case KeyEvent.KEYCODE_INFO:
+                          showLiveInfo();
                           return true;
                   }
                   return false;
@@ -1728,18 +2432,371 @@ jobs:
               @Override
               protected void onStop() {
                   super.onStop();
+                  savePos();
                   if (player != null) player.pause();
               }
 
               @Override
               protected void onDestroy() {
                   super.onDestroy();
-                  h.removeCallbacks(hideInfo);
-                  h.removeCallbacks(jumpRun);
+                  h.removeCallbacksAndMessages(null);
                   if (player != null) {
                       player.release();
                       player = null;
                   }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Players.java <<'EOF'
+          package com.my.iptv;
+
+          import android.content.Context;
+
+          import androidx.media3.common.MediaItem;
+          import androidx.media3.common.MimeTypes;
+          import androidx.media3.datasource.DefaultDataSource;
+          import androidx.media3.datasource.DefaultHttpDataSource;
+          import androidx.media3.exoplayer.ExoPlayer;
+          import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
+
+          import java.util.ArrayList;
+          import java.util.List;
+
+          public class Players {
+              public static ExoPlayer create(Context ctx) {
+                  DefaultHttpDataSource.Factory http = new DefaultHttpDataSource.Factory()
+                          .setUserAgent(Loader.UA)
+                          .setAllowCrossProtocolRedirects(true)
+                          .setConnectTimeoutMs(20000)
+                          .setReadTimeoutMs(30000);
+                  ExoPlayer p = new ExoPlayer.Builder(ctx)
+                          .setMediaSourceFactory(new DefaultMediaSourceFactory(ctx)
+                                  .setDataSourceFactory(new DefaultDataSource.Factory(ctx, http)))
+                          .setSeekBackIncrementMs(10000)
+                          .setSeekForwardIncrementMs(30000)
+                          .build();
+                  p.setTrackSelectionParameters(p.getTrackSelectionParameters().buildUpon()
+                          .setPreferredTextLanguage("ar")
+                          .build());
+                  return p;
+              }
+
+              // الروابط اللي نجربها بالترتيب لين وحدة تشتغل
+              public static List<MediaItem> tries(Channel c, boolean vod) {
+                  List<MediaItem> t = new ArrayList<>();
+                  t.add(MediaItem.fromUri(c.url));
+                  if (c.altUrl != null) t.add(MediaItem.fromUri(c.altUrl));
+                  if (!vod && !c.url.contains(".m3u8")) {
+                      t.add(new MediaItem.Builder().setUri(c.url).setMimeType(MimeTypes.APPLICATION_M3U8).build());
+                  }
+                  return t;
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/SettingsActivity.java <<'EOF'
+          package com.my.iptv;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.widget.Button;
+          import android.widget.CheckBox;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class SettingsActivity extends Activity {
+              LinearLayout box;
+
+              int dp(int v) {
+                  return (int) (v * getResources().getDisplayMetrics().density);
+              }
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  ScrollView sv = new ScrollView(this);
+                  sv.setBackgroundColor(0xFF101820);
+                  box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  box.setPadding(dp(48), dp(24), dp(48), dp(24));
+                  sv.addView(box);
+
+                  TextView title = new TextView(this);
+                  title.setText("⚙  الإعدادات");
+                  title.setTextColor(Color.WHITE);
+                  title.setTextSize(28);
+                  title.setPadding(0, 0, 0, dp(16));
+                  box.addView(title);
+
+                  check("يفتح على آخر قناة شغّلتها", "resume_last", true);
+                  check("معاينة القناة في اللوحة اليمين", "preview", true);
+                  CheckBox auto = check("يشتغل التطبيق مع تشغيل التلفزيون", "autostart", false);
+                  auto.setOnCheckedChangeListener((v, on) -> {
+                      Store.setOpt(this, "autostart", on);
+                      if (on) ensureOverlay();
+                  });
+                  note("التشغيل التلقائي يحتاج صلاحية «العرض فوق التطبيقات». ويشتغل لما التلفزيون يقوم من طفي كامل، وأحياناً ما يشتغل لما يقوم من وضع الاستعداد.");
+
+                  button("👁  إظهار كل الأقسام المخفية", () -> {
+                      Store.clearHidden(this);
+                      toast("رجعت كل الأقسام");
+                  });
+                  button("🗑  مسح «أكمل المشاهدة»", () -> {
+                      Store.clearCw(this);
+                      toast("انمسحت");
+                  });
+                  button("👤  تغيير الحساب", () -> startActivity(new Intent(this, LoginActivity.class)));
+
+                  setContentView(sv);
+              }
+
+              void toast(String s) {
+                  Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+              }
+
+              CheckBox check(String text, String key, boolean def) {
+                  CheckBox cb = new CheckBox(this);
+                  cb.setText(text);
+                  cb.setTextSize(22);
+                  cb.setTextColor(Color.WHITE);
+                  cb.setPadding(dp(8), dp(12), dp(8), dp(12));
+                  cb.setChecked(Store.opt(this, key, def));
+                  cb.setOnCheckedChangeListener((v, on) -> Store.setOpt(this, key, on));
+                  box.addView(cb);
+                  return cb;
+              }
+
+              void note(String text) {
+                  TextView tv = new TextView(this);
+                  tv.setText(text);
+                  tv.setTextColor(0xFF8899AA);
+                  tv.setTextSize(16);
+                  tv.setPadding(dp(8), 0, dp(8), dp(16));
+                  box.addView(tv);
+              }
+
+              void button(String text, Runnable r) {
+                  Button b = new Button(this);
+                  b.setText(text);
+                  b.setTextSize(20);
+                  b.setOnClickListener(v -> r.run());
+                  box.addView(b);
+              }
+
+              void ensureOverlay() {
+                  if (Build.VERSION.SDK_INT < 23 || android.provider.Settings.canDrawOverlays(this)) return;
+                  try {
+                      startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                              Uri.parse("package:" + getPackageName())));
+                      Toast.makeText(this, "فعّل الصلاحية لهذا التطبيق وارجع", Toast.LENGTH_LONG).show();
+                  } catch (Exception e) {
+                      Toast.makeText(this, "روح إعدادات التلفزيون ← التطبيقات ← صلاحيات خاصة ← العرض فوق التطبيقات، وفعّلها للتطبيق",
+                              Toast.LENGTH_LONG).show();
+                  }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Store.java <<'EOF'
+          package com.my.iptv;
+
+          import android.content.Context;
+          import android.content.SharedPreferences;
+
+          import org.json.JSONArray;
+          import org.json.JSONException;
+          import org.json.JSONObject;
+
+          import java.util.ArrayList;
+          import java.util.HashSet;
+          import java.util.List;
+          import java.util.Set;
+
+          // كل اللي ينحفظ على التلفزيون: المفضلة، الأقسام المخفية، آخر قناة، أكمل المشاهدة، الإعدادات
+          public class Store {
+              static SharedPreferences sp(Context c) {
+                  return c.getSharedPreferences("state", Context.MODE_PRIVATE);
+              }
+
+              static SharedPreferences positions(Context c) {
+                  return c.getSharedPreferences("positions", Context.MODE_PRIVATE);
+              }
+
+              public static String keyOf(Channel ch) {
+                  return ch.url != null && !ch.url.isEmpty() ? ch.url : "series:" + ch.seriesId;
+              }
+
+              static JSONObject toJson(Channel ch) throws JSONException {
+                  JSONObject o = new JSONObject();
+                  o.put("name", ch.name == null ? "" : ch.name);
+                  o.putOpt("url", ch.url);
+                  o.putOpt("altUrl", ch.altUrl);
+                  o.putOpt("group", ch.group);
+                  o.putOpt("seriesId", ch.seriesId);
+                  o.putOpt("logo", ch.logo);
+                  o.putOpt("streamId", ch.streamId);
+                  return o;
+              }
+
+              static String s(JSONObject o, String k) {
+                  return o.has(k) && !o.isNull(k) ? o.optString(k) : null;
+              }
+
+              static Channel fromJson(JSONObject o) {
+                  Channel ch = new Channel();
+                  ch.name = o.optString("name", "");
+                  ch.url = s(o, "url");
+                  ch.altUrl = s(o, "altUrl");
+                  ch.group = s(o, "group");
+                  ch.seriesId = s(o, "seriesId");
+                  ch.logo = s(o, "logo");
+                  ch.streamId = s(o, "streamId");
+                  return ch;
+              }
+
+              static List<Channel> getList(Context c, String key) {
+                  List<Channel> out = new ArrayList<>();
+                  try {
+                      JSONArray a = new JSONArray(sp(c).getString(key, "[]"));
+                      for (int i = 0; i < a.length(); i++) out.add(fromJson(a.getJSONObject(i)));
+                  } catch (Exception ignored) {
+                  }
+                  return out;
+              }
+
+              static void putList(Context c, String key, List<Channel> list) {
+                  JSONArray a = new JSONArray();
+                  try {
+                      for (Channel ch : list) a.put(toJson(ch));
+                  } catch (JSONException ignored) {
+                  }
+                  sp(c).edit().putString(key, a.toString()).apply();
+              }
+
+              static int indexOfKey(List<Channel> list, String key) {
+                  for (int i = 0; i < list.size(); i++) if (keyOf(list.get(i)).equals(key)) return i;
+                  return -1;
+              }
+
+              // ---------- المفضلة ----------
+              public static List<Channel> favs(Context c, int sec) {
+                  return getList(c, "fav_" + sec);
+              }
+
+              public static void addFav(Context c, int sec, Channel ch) {
+                  List<Channel> l = favs(c, sec);
+                  if (indexOfKey(l, keyOf(ch)) < 0) l.add(ch);
+                  putList(c, "fav_" + sec, l);
+              }
+
+              public static void removeFav(Context c, int sec, Channel ch) {
+                  List<Channel> l = favs(c, sec);
+                  int i = indexOfKey(l, keyOf(ch));
+                  if (i >= 0) l.remove(i);
+                  putList(c, "fav_" + sec, l);
+              }
+
+              public static void moveFav(Context c, int sec, int from, int to) {
+                  List<Channel> l = favs(c, sec);
+                  if (from < 0 || from >= l.size() || to < 0 || to >= l.size()) return;
+                  Channel x = l.remove(from);
+                  l.add(to, x);
+                  putList(c, "fav_" + sec, l);
+              }
+
+              // ---------- الأقسام المخفية ----------
+              public static Set<String> hidden(Context c, int sec) {
+                  Set<String> out = new HashSet<>();
+                  try {
+                      JSONArray a = new JSONArray(sp(c).getString("hidden_" + sec, "[]"));
+                      for (int i = 0; i < a.length(); i++) out.add(a.getString(i));
+                  } catch (Exception ignored) {
+                  }
+                  return out;
+              }
+
+              public static void setHidden(Context c, int sec, String group, boolean hide) {
+                  Set<String> h = hidden(c, sec);
+                  if (hide) h.add(group);
+                  else h.remove(group);
+                  JSONArray a = new JSONArray();
+                  for (String g : h) a.put(g);
+                  sp(c).edit().putString("hidden_" + sec, a.toString()).apply();
+              }
+
+              public static void clearHidden(Context c) {
+                  SharedPreferences.Editor e = sp(c).edit();
+                  for (int i = 0; i < 3; i++) e.remove("hidden_" + i);
+                  e.apply();
+              }
+
+              // ---------- آخر قناة ----------
+              public static void setLastLive(Context c, Channel ch) {
+                  List<Channel> l = new ArrayList<>();
+                  l.add(ch);
+                  putList(c, "last_live", l);
+              }
+
+              public static Channel lastLive(Context c) {
+                  List<Channel> l = getList(c, "last_live");
+                  return l.isEmpty() ? null : l.get(0);
+              }
+
+              // ---------- أكمل المشاهدة ----------
+              public static long getPos(Context c, String url) {
+                  if (url == null) return 0;
+                  return positions(c).getLong(url, 0);
+              }
+
+              public static void setPos(Context c, String url, long pos) {
+                  if (url == null) return;
+                  if (pos <= 0) positions(c).edit().remove(url).apply();
+                  else positions(c).edit().putLong(url, pos).apply();
+              }
+
+              public static List<Channel> cw(Context c, int sec) {
+                  return getList(c, "cw_" + sec);
+              }
+
+              public static void touchCw(Context c, int sec, Channel ch) {
+                  if (sec == Data.LIVE || ch.url == null) return;
+                  List<Channel> l = cw(c, sec);
+                  int i = indexOfKey(l, keyOf(ch));
+                  if (i >= 0) l.remove(i);
+                  l.add(0, ch);
+                  while (l.size() > 40) l.remove(l.size() - 1);
+                  putList(c, "cw_" + sec, l);
+              }
+
+              public static void removeCw(Context c, int sec, String url) {
+                  if (url == null) return;
+                  List<Channel> l = cw(c, sec);
+                  int i = indexOfKey(l, url);
+                  if (i >= 0) {
+                      l.remove(i);
+                      putList(c, "cw_" + sec, l);
+                  }
+              }
+
+              public static void clearCw(Context c) {
+                  sp(c).edit().remove("cw_1").remove("cw_2").apply();
+                  positions(c).edit().clear().apply();
+              }
+
+              // ---------- الإعدادات ----------
+              public static boolean opt(Context c, String key, boolean def) {
+                  return sp(c).getBoolean("opt_" + key, def);
+              }
+
+              public static void setOpt(Context c, String key, boolean v) {
+                  sp(c).edit().putBoolean("opt_" + key, v).apply();
               }
           }
           EOF
