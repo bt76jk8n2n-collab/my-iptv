@@ -9,12 +9,14 @@ permissions:
 
 env:
   # اسم التطبيق اللي يطلع على التلفزيون - تقدر تغيره
-  APP_NAME: "alabdily10"
+  APP_NAME: "IPTV"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -23,6 +25,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+
+      - name: Signing key (created once, then reused so updates install over the old app)
+        run: |
+          if [ ! -f keystore/iptv.jks ]; then
+            mkdir -p keystore
+            keytool -genkeypair -keystore keystore/iptv.jks -alias iptv -keyalg RSA -keysize 2048 \
+              -validity 10000 -storepass iptv123456 -keypass iptv123456 -dname "CN=IPTV"
+            git config user.name "github-actions"
+            git config user.email "github-actions@users.noreply.github.com"
+            git add keystore/iptv.jks
+            git commit -m "Add signing key [skip ci]"
+            git push
+          fi
 
       - name: Write project files
         run: |
@@ -40,8 +55,21 @@ jobs:
                   applicationId "com.my.iptv"
                   minSdk 21
                   targetSdk 34
-                  versionCode 3
-                  versionName "3.0"
+                  versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+                  versionName "1." + (System.getenv("VERSION_CODE") ?: "1")
+              }
+              signingConfigs {
+                  fixed {
+                      storeFile file(System.getenv("KEYSTORE_PATH") ?: "none.jks")
+                      storePassword "iptv123456"
+                      keyAlias "iptv"
+                      keyPassword "iptv123456"
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.fixed
+                  }
               }
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
@@ -59,6 +87,7 @@ jobs:
               implementation 'androidx.media3:media3-exoplayer:1.4.1'
               implementation 'androidx.media3:media3-exoplayer-hls:1.4.1'
               implementation 'androidx.media3:media3-ui:1.4.1'
+              implementation 'com.github.bumptech.glide:glide:4.16.0'
           }
           EOF
 
@@ -162,6 +191,7 @@ jobs:
               public String altUrl;
               public String group;
               public String seriesId;
+              public String logo;
               public long added;
           }
           EOF
@@ -195,6 +225,212 @@ jobs:
                       groups.get(i).clear();
                       items.get(i).clear();
                   }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Flags.java <<'EOF'
+          package com.my.iptv;
+
+          import java.util.Arrays;
+          import java.util.HashSet;
+          import java.util.Set;
+
+          // يطلع علم الدولة من اسم القسم (عربي أو إنجليزي)
+          public class Flags {
+              static final String[][] MAP = {
+                      {"KW", "kuwait", "الكويت"},
+                      {"SA", "saudi", "ksa", "السعودية", "السعوديه"},
+                      {"AE", "uae", "emirates", "الامارات", "الإمارات"},
+                      {"BH", "bahrain", "البحرين"},
+                      {"QA", "qatar", "قطر"},
+                      {"OM", "oman", "عمان"},
+                      {"YE", "yemen", "اليمن"},
+                      {"IQ", "iraq", "العراق"},
+                      {"JO", "jordan", "jordon", "الأردن", "الاردن"},
+                      {"SY", "syria", "سوريا"},
+                      {"LB", "lebanon", "لبنان"},
+                      {"PS", "palestine", "فلسطين"},
+                      {"EG", "egypt", "مصر"},
+                      {"SD", "sudan", "السودان"},
+                      {"LY", "libya", "ليبيا"},
+                      {"TN", "tunisia", "تونس"},
+                      {"DZ", "algeria", "الجزائر"},
+                      {"MA", "morocco", "المغرب"},
+                      {"MR", "mauritania", "موريتانيا"},
+                      {"SO", "somalia", "الصومال"},
+                      {"TR", "turkey", "turkish", "türkiye", "تركيا"},
+                      {"IR", "iran", "ايران", "إيران"},
+                      {"PK", "pakistan", "باكستان"},
+                      {"IN", "india", "indian", "الهند"},
+                      {"AF", "afghanistan", "افغانستان"},
+                      {"BD", "bangladesh", "بنغلاديش"},
+                      {"PH", "philippines", "الفلبين"},
+                      {"US", "usa", "america", "امريكا", "أمريكا"},
+                      {"GB", "uk", "england", "britain", "بريطانيا"},
+                      {"FR", "france", "french", "فرنسا"},
+                      {"DE", "germany", "german", "المانيا", "ألمانيا"},
+                      {"IT", "italy", "italian", "ايطاليا", "إيطاليا"},
+                      {"ES", "spain", "spanish", "اسبانيا", "إسبانيا"},
+                      {"PT", "portugal", "البرتغال"},
+                      {"NL", "netherlands", "holland", "هولندا"},
+                      {"BE", "belgium", "بلجيكا"},
+                      {"SE", "sweden", "السويد"},
+                      {"NO", "norway", "النرويج"},
+                      {"DK", "denmark", "الدنمارك"},
+                      {"FI", "finland"},
+                      {"PL", "poland"},
+                      {"RU", "russia", "روسيا"},
+                      {"UA", "ukraine"},
+                      {"GR", "greece"},
+                      {"RO", "romania"},
+                      {"AL", "albania"},
+                      {"RS", "serbia"},
+                      {"HR", "croatia"},
+                      {"BR", "brazil", "البرازيل"},
+                      {"AR", "argentina", "الأرجنتين"},
+                      {"MX", "mexico"},
+                      {"CA", "canada", "كندا"},
+                      {"AU", "australia", "استراليا", "أستراليا"},
+                      {"CN", "china", "الصين"},
+                      {"JP", "japan", "اليابان"},
+                      {"KR", "korea", "كوريا"},
+                      {"TH", "thailand"},
+                      {"ID", "indonesia", "اندونيسيا"},
+                      {"MY", "malaysia", "ماليزيا"},
+                      {"NG", "nigeria"},
+                      {"ZA", "south africa"},
+                      {"ET", "ethiopia"},
+                      {"KE", "kenya"},
+              };
+
+              public static String find(String name) {
+                  if (name == null) return null;
+                  String low = name.toLowerCase();
+                  Set<String> words = new HashSet<>(Arrays.asList(low.split("[^\\p{L}]+")));
+                  for (String[] row : MAP) {
+                      for (int k = 1; k < row.length; k++) {
+                          String kw = row[k];
+                          boolean arabic = kw.charAt(0) >= 0x0600 && kw.charAt(0) <= 0x06FF;
+                          boolean hit;
+                          if (arabic) hit = name.contains(kw);
+                          else if (kw.contains(" ")) hit = low.contains(kw);
+                          else hit = words.contains(kw);
+                          if (hit) return emoji(row[0]);
+                      }
+                  }
+                  return null;
+              }
+
+              static String emoji(String cc) {
+                  int base = 0x1F1E6;
+                  return new String(Character.toChars(base + cc.charAt(0) - 'A'))
+                          + new String(Character.toChars(base + cc.charAt(1) - 'A'));
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/IconAdapter.java <<'EOF'
+          package com.my.iptv;
+
+          import android.content.Context;
+          import android.graphics.Color;
+          import android.text.TextUtils;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.BaseAdapter;
+          import android.widget.FrameLayout;
+          import android.widget.ImageView;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import com.bumptech.glide.Glide;
+
+          import java.util.List;
+
+          public class IconAdapter extends BaseAdapter {
+              public static class Row {
+                  public final String text;
+                  public final String icon;
+                  public final String emoji;
+
+                  public Row(String text, String icon, String emoji) {
+                      this.text = text;
+                      this.icon = icon;
+                      this.emoji = emoji;
+                  }
+              }
+
+              static class Holder {
+                  ImageView image;
+                  TextView emoji;
+                  TextView text;
+              }
+
+              private final Context ctx;
+              private final List<Row> rows;
+
+              public IconAdapter(Context ctx, List<Row> rows) {
+                  this.ctx = ctx;
+                  this.rows = rows;
+              }
+
+              int dp(int v) {
+                  return (int) (v * ctx.getResources().getDisplayMetrics().density);
+              }
+
+              @Override public int getCount() { return rows.size(); }
+              @Override public Object getItem(int p) { return rows.get(p); }
+              @Override public long getItemId(int p) { return p; }
+
+              @Override
+              public View getView(int p, View cv, ViewGroup parent) {
+                  Holder h;
+                  if (cv == null) {
+                      LinearLayout row = new LinearLayout(ctx);
+                      row.setOrientation(LinearLayout.HORIZONTAL);
+                      row.setGravity(Gravity.CENTER_VERTICAL);
+                      row.setPadding(dp(12), dp(8), dp(12), dp(8));
+                      row.setMinimumHeight(dp(56));
+
+                      FrameLayout box = new FrameLayout(ctx);
+                      h = new Holder();
+                      h.image = new ImageView(ctx);
+                      h.image.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                      h.emoji = new TextView(ctx);
+                      h.emoji.setTextSize(24);
+                      h.emoji.setGravity(Gravity.CENTER);
+                      box.addView(h.image, new FrameLayout.LayoutParams(dp(56), dp(40), Gravity.CENTER));
+                      box.addView(h.emoji, new FrameLayout.LayoutParams(dp(56), dp(40), Gravity.CENTER));
+                      row.addView(box, new LinearLayout.LayoutParams(dp(56), dp(40)));
+
+                      h.text = new TextView(ctx);
+                      h.text.setTextColor(Color.WHITE);
+                      h.text.setTextSize(20);
+                      h.text.setSingleLine(true);
+                      h.text.setEllipsize(TextUtils.TruncateAt.END);
+                      h.text.setPadding(dp(14), 0, 0, 0);
+                      row.addView(h.text, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1));
+                      row.setTag(h);
+                      cv = row;
+                  } else {
+                      h = (Holder) cv.getTag();
+                  }
+                  Row r = rows.get(p);
+                  h.text.setText(r.text);
+                  if (r.icon != null && !r.icon.isEmpty()) {
+                      h.emoji.setVisibility(View.GONE);
+                      h.image.setVisibility(View.VISIBLE);
+                      Glide.with(ctx).load(r.icon).fitCenter().into(h.image);
+                  } else {
+                      Glide.with(ctx).clear(h.image);
+                      h.image.setImageDrawable(null);
+                      h.image.setVisibility(View.GONE);
+                      h.emoji.setVisibility(View.VISIBLE);
+                      h.emoji.setText(r.emoji == null ? "" : r.emoji);
+                  }
+                  return cv;
               }
           }
           EOF
@@ -263,6 +499,11 @@ jobs:
                   } catch (Exception e) {
                       return 0;
                   }
+              }
+
+              static String str(JSONObject o, String key) {
+                  String v = o.optString(key, "");
+                  return v.equals("null") ? "" : v.trim();
               }
 
               static InputStream open(String u) throws IOException {
@@ -413,6 +654,7 @@ jobs:
                       String line;
                       String name = null;
                       String group = null;
+                      String logo = null;
                       while ((line = r.readLine()) != null) {
                           line = line.replace("﻿", "").trim();
                           if (line.isEmpty()) continue;
@@ -421,6 +663,7 @@ jobs:
                               int c = line.indexOf(',', q < 0 ? 0 : q);
                               name = c >= 0 ? line.substring(c + 1).trim() : null;
                               group = attr(line, "group-title");
+                              logo = attr(line, "tvg-logo");
                           } else if (line.startsWith("#EXTGRP:")) {
                               group = line.substring(8).trim();
                           } else if (!line.startsWith("#")) {
@@ -428,9 +671,11 @@ jobs:
                               ch.url = line;
                               ch.name = (name != null && !name.isEmpty()) ? name : line;
                               ch.group = (group != null && !group.isEmpty()) ? group : NO_GROUP;
+                              ch.logo = logo;
                               out.add(ch);
                               name = null;
                               group = null;
+                              logo = null;
                           }
                       }
                   } finally {
@@ -478,6 +723,7 @@ jobs:
                       Channel ch = new Channel();
                       ch.name = o.optString("name", "");
                       ch.group = groupOf(names, o);
+                      ch.logo = str(o, "stream_icon");
                       String path = c[0] + "/live/" + c[1] + "/" + c[2] + "/" + o.optString("stream_id");
                       ch.url = path + ".m3u8";
                       ch.altUrl = path + ".ts";
@@ -499,6 +745,7 @@ jobs:
                       if (ext.isEmpty() || ext.equals("null")) ext = "mp4";
                       ch.url = c[0] + "/movie/" + c[1] + "/" + c[2] + "/" + o.optString("stream_id") + "." + ext;
                       ch.added = num(o.optString("added", "0"));
+                      ch.logo = str(o, "stream_icon");
                       list.add(ch);
                   }
                   return store(list, order);
@@ -516,6 +763,7 @@ jobs:
                       ch.group = groupOf(names, o);
                       ch.seriesId = o.optString("series_id");
                       ch.added = num(o.optString("last_modified", "0"));
+                      ch.logo = str(o, "cover");
                       list.add(ch);
                   }
                   return store(list, order);
@@ -702,6 +950,7 @@ jobs:
           import android.text.Editable;
           import android.text.InputType;
           import android.text.TextWatcher;
+          import android.view.Gravity;
           import android.view.KeyEvent;
           import android.view.View;
           import android.view.inputmethod.EditorInfo;
@@ -709,35 +958,61 @@ jobs:
           import android.widget.AdapterView;
           import android.widget.Button;
           import android.widget.EditText;
+          import android.widget.FrameLayout;
+          import android.widget.ImageView;
           import android.widget.LinearLayout;
           import android.widget.ListView;
           import android.widget.TextView;
 
+          import com.bumptech.glide.Glide;
+
           import java.util.ArrayList;
           import java.util.Collections;
+          import java.util.HashMap;
           import java.util.List;
+          import java.util.Map;
 
           public class MainActivity extends Activity {
               static final String[] TAB_NAMES = {"القنوات", "الأفلام", "المسلسلات"};
+              static final String[] TAB_EMOJI = {"📺", "🎬", "🎞️"};
+              static final String KEY_ALL = "\u0000all";
+              static final String KEY_NEW = "\u0000new";
               static final int NEWEST_COUNT = 300;
+
+              // المستويات: الأقسام ← العناصر ← الحلقات
+              static final int LV_GROUPS = 0;
+              static final int LV_ITEMS = 1;
+              static final int LV_EPISODES = 2;
 
               TextView status;
               EditText search;
-              ListView groupList;
-              ListView channelList;
-              TextAdapter groupAdapter;
-              TextAdapter channelAdapter;
+              Button backBtn;
+              ListView list;
+              IconAdapter adapter;
+              ImageView pvImage;
+              TextView pvEmoji, pvTitle, pvSub;
               final Button[] tabs = new Button[3];
-              final List<String> groupNames = new ArrayList<>();
-              final List<String> rowNames = new ArrayList<>();
+
+              final List<IconAdapter.Row> rows = new ArrayList<>();
+              final List<String> groupKeys = new ArrayList<>();
               final List<Channel> shown = new ArrayList<>();
+              final Map<String, String> groupIcon = new HashMap<>();
+              final Map<String, Integer> groupCount = new HashMap<>();
               final boolean[] loading = new boolean[3];
+
               int section = Data.LIVE;
-              int selectedGroup = -1;
-              boolean inEpisodes = false;
+              int level = LV_GROUPS;
+              int lastGroupPos = 0;
+              boolean searchMode = false;
+              String itemsTitle = "";
+              // للرجوع من الحلقات للمسلسلات
+              final List<Channel> savedItems = new ArrayList<>();
+              String savedTitle = "";
+              int savedPos = 0;
+
               String digits = "";
               final Handler ui = new Handler(Looper.getMainLooper());
-              final Runnable searchRun = this::rebuild;
+              final Runnable searchRun = this::runSearch;
               final Runnable jumpRun = this::jumpToNumber;
 
               @Override
@@ -756,16 +1031,6 @@ jobs:
                   return (int) (v * getResources().getDisplayMetrics().density);
               }
 
-              ListView makeList() {
-                  ListView lv = new ListView(this);
-                  lv.setSelector(new ColorDrawable(0x882563EB));
-                  lv.setDrawSelectorOnTop(true);
-                  lv.setDivider(new ColorDrawable(0x22FFFFFF));
-                  lv.setDividerHeight(1);
-                  lv.setBackgroundColor(0xFF18222E);
-                  return lv;
-              }
-
               Button makeButton(String text) {
                   Button btn = new Button(this);
                   btn.setText(text);
@@ -779,7 +1044,7 @@ jobs:
                   root.setBackgroundColor(0xFF101820);
                   root.setPadding(dp(24), dp(12), dp(24), dp(12));
 
-                  // الصف الأول: الأقسام + الأزرار
+                  // الصف الأول: التبويبات + الأزرار
                   LinearLayout top = new LinearLayout(this);
                   top.setOrientation(LinearLayout.HORIZONTAL);
                   for (int i = 0; i < 3; i++) {
@@ -789,15 +1054,14 @@ jobs:
                       tabs[i].setOnClickListener(v -> switchSection(idx));
                       top.addView(tabs[i]);
                   }
-                  View spacer = new View(this);
-                  top.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1));
+                  top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
                   Button refresh = makeButton("تحديث");
                   Button account = makeButton("تغيير الحساب");
                   top.addView(refresh);
                   top.addView(account);
                   root.addView(top);
 
-                  // الصف الثاني: البحث
+                  // البحث
                   search = new EditText(this);
                   search.setHint("🔍  اكتب للبحث...");
                   search.setSingleLine(true);
@@ -814,38 +1078,71 @@ jobs:
                   status.setPadding(0, dp(4), 0, dp(8));
                   root.addView(status);
 
-                  // القوائم
+                  // الجسم: القائمة يسار، والعرض يمين
                   LinearLayout body = new LinearLayout(this);
                   body.setOrientation(LinearLayout.HORIZONTAL);
-                  groupList = makeList();
-                  channelList = makeList();
-                  LinearLayout.LayoutParams gl = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1);
-                  gl.setMargins(0, 0, dp(12), 0);
-                  body.addView(groupList, gl);
-                  body.addView(channelList, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2));
+                  body.setLayoutDirection(View.LAYOUT_DIRECTION_LTR);
+
+                  LinearLayout left = new LinearLayout(this);
+                  left.setOrientation(LinearLayout.VERTICAL);
+                  backBtn = makeButton("⬅  رجوع للأقسام");
+                  backBtn.setVisibility(View.GONE);
+                  left.addView(backBtn, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+                  list = new ListView(this);
+                  list.setSelector(new ColorDrawable(0x882563EB));
+                  list.setDrawSelectorOnTop(true);
+                  list.setDivider(new ColorDrawable(0x22FFFFFF));
+                  list.setDividerHeight(1);
+                  list.setBackgroundColor(0xFF18222E);
+                  left.addView(list, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+                  body.addView(left, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 2));
+
+                  LinearLayout right = new LinearLayout(this);
+                  right.setOrientation(LinearLayout.VERTICAL);
+                  right.setGravity(Gravity.CENTER);
+                  right.setBackgroundColor(0xFF18222E);
+                  right.setPadding(dp(24), dp(24), dp(24), dp(24));
+                  right.setLayoutDirection(View.LAYOUT_DIRECTION_RTL);
+                  FrameLayout pvBox = new FrameLayout(this);
+                  pvImage = new ImageView(this);
+                  pvImage.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                  pvEmoji = new TextView(this);
+                  pvEmoji.setTextSize(96);
+                  pvEmoji.setGravity(Gravity.CENTER);
+                  pvBox.addView(pvImage, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  pvBox.addView(pvEmoji, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                  right.addView(pvBox, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+                  pvTitle = new TextView(this);
+                  pvTitle.setTextColor(Color.WHITE);
+                  pvTitle.setTextSize(28);
+                  pvTitle.setGravity(Gravity.CENTER);
+                  pvTitle.setPadding(0, dp(16), 0, dp(8));
+                  right.addView(pvTitle);
+                  pvSub = new TextView(this);
+                  pvSub.setTextColor(0xFFAABBCC);
+                  pvSub.setTextSize(18);
+                  pvSub.setGravity(Gravity.CENTER);
+                  right.addView(pvSub);
+                  LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 3);
+                  rp.setMargins(dp(16), 0, 0, 0);
+                  body.addView(right, rp);
+
                   root.addView(body, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
 
-                  groupAdapter = new TextAdapter(this, groupNames, 20);
-                  channelAdapter = new TextAdapter(this, rowNames, 20);
-                  groupList.setAdapter(groupAdapter);
-                  channelList.setAdapter(channelAdapter);
-
-                  groupList.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+                  adapter = new IconAdapter(this, rows);
+                  list.setAdapter(adapter);
+                  list.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
                       @Override
                       public void onItemSelected(AdapterView<?> a, View v, int pos, long id) {
-                          if (query().isEmpty()) showGroup(pos, false);
+                          updatePreview(pos);
                       }
 
                       @Override
                       public void onNothingSelected(AdapterView<?> a) {
                       }
                   });
-                  groupList.setOnItemClickListener((a, v, pos, id) -> {
-                      if (!query().isEmpty()) search.setText("");
-                      showGroup(pos, true);
-                      channelList.requestFocus();
-                  });
-                  channelList.setOnItemClickListener((a, v, pos, id) -> openItem(pos));
+                  list.setOnItemClickListener((a, v, pos, id) -> openRow(pos));
+                  backBtn.setOnClickListener(v -> goBack());
 
                   search.addTextChangedListener(new TextWatcher() {
                       @Override
@@ -864,7 +1161,7 @@ jobs:
                   });
                   search.setOnEditorActionListener((v, actionId, e) -> {
                       hideKeyboard();
-                      channelList.requestFocus();
+                      list.requestFocus();
                       return true;
                   });
 
@@ -900,26 +1197,31 @@ jobs:
                           case 'ئ': ch = 'ي'; break;
                           case '_': case '-': case '.': ch = ' '; break;
                       }
-                      if (ch >= 'ً' && ch <= 'ْ') continue; // التشكيل
+                      if (ch >= 'ً' && ch <= 'ْ') continue;
                       sb.append(ch);
                   }
                   return sb.toString();
               }
 
+              // ---------- التبويبات والتحميل ----------
+
               void switchSection(int sec) {
                   section = sec;
-                  inEpisodes = false;
+                  searchMode = false;
                   for (int i = 0; i < 3; i++) {
                       tabs[i].setAlpha(i == sec ? 1f : 0.55f);
                       tabs[i].setText(i == sec ? "● " + TAB_NAMES[i] : TAB_NAMES[i]);
                   }
                   if (!query().isEmpty()) search.setText("");
-                  groupNames.clear();
-                  groupAdapter.notifyDataSetChanged();
+                  groupKeys.clear();
+                  rows.clear();
                   shown.clear();
-                  rowNames.clear();
-                  channelAdapter.notifyDataSetChanged();
-                  if (Data.loaded[sec]) showData();
+                  adapter.notifyDataSetChanged();
+                  backBtn.setVisibility(View.GONE);
+                  level = LV_GROUPS;
+                  lastGroupPos = 0;
+                  setPreview(null, TAB_EMOJI[sec], TAB_NAMES[sec], "");
+                  if (Data.loaded[sec]) onDataReady();
                   else load(sec);
               }
 
@@ -938,7 +1240,7 @@ jobs:
                               Data.items.get(sec).clear();
                               Data.items.get(sec).addAll(r.items);
                               Data.loaded[sec] = true;
-                              if (sec == section) showData();
+                              if (sec == section) onDataReady();
                           });
                       } catch (Exception e) {
                           final String msg = e.getMessage();
@@ -950,112 +1252,154 @@ jobs:
                   }).start();
               }
 
-              int firstRealGroup() {
-                  return section == Data.LIVE ? 1 : 2;
+              void onDataReady() {
+                  groupIcon.clear();
+                  groupCount.clear();
+                  for (Channel ch : Data.items.get(section)) {
+                      Integer c = groupCount.get(ch.group);
+                      groupCount.put(ch.group, c == null ? 1 : c + 1);
+                      if (!groupIcon.containsKey(ch.group) && ch.logo != null && !ch.logo.isEmpty()) {
+                          groupIcon.put(ch.group, ch.logo);
+                      }
+                  }
+                  groupKeys.clear();
+                  groupKeys.add(KEY_ALL);
+                  if (section != Data.LIVE) groupKeys.add(KEY_NEW);
+                  groupKeys.addAll(Data.groups.get(section));
+                  lastGroupPos = section == Data.LIVE ? 0 : 1;
+                  showGroups();
+                  list.requestFocus();
               }
 
-              void showData() {
-                  List<Channel> all = Data.items.get(section);
-                  groupNames.clear();
-                  groupNames.add("الكل (" + all.size() + ")");
-                  if (section != Data.LIVE) groupNames.add("🆕 الأحدث");
-                  groupNames.addAll(Data.groups.get(section));
-                  groupAdapter.notifyDataSetChanged();
-                  int start = section == Data.LIVE ? 0 : 1;
-                  selectedGroup = -1;
-                  showGroup(start, true);
-                  groupList.setSelection(start);
-                  groupList.requestFocus();
+              // ---------- العرض ----------
+
+              String groupLabel(String key) {
+                  if (KEY_ALL.equals(key)) return "الكل (" + Data.items.get(section).size() + ")";
+                  if (KEY_NEW.equals(key)) return "الأحدث";
+                  Integer c = groupCount.get(key);
+                  return key + "  (" + (c == null ? 0 : c) + ")";
               }
 
-              void showGroup(int pos, boolean force) {
-                  if (pos < 0 || pos >= groupNames.size()) return;
-                  if (!force && pos == selectedGroup && !inEpisodes) return;
-                  selectedGroup = pos;
-                  groupAdapter.highlight = pos;
-                  groupAdapter.notifyDataSetChanged();
-                  rebuild();
+              IconAdapter.Row groupRow(String key) {
+                  if (KEY_ALL.equals(key)) return new IconAdapter.Row(groupLabel(key), null, TAB_EMOJI[section]);
+                  if (KEY_NEW.equals(key)) return new IconAdapter.Row(groupLabel(key), null, "🆕");
+                  String flag = Flags.find(key);
+                  if (flag != null) return new IconAdapter.Row(groupLabel(key), null, flag);
+                  return new IconAdapter.Row(groupLabel(key), groupIcon.get(key), TAB_EMOJI[section]);
               }
 
-              void rebuild() {
-                  inEpisodes = false;
+              void showGroups() {
+                  level = LV_GROUPS;
+                  searchMode = false;
+                  backBtn.setVisibility(View.GONE);
+                  rows.clear();
+                  for (String k : groupKeys) rows.add(groupRow(k));
+                  adapter.notifyDataSetChanged();
+                  int pos = Math.min(lastGroupPos, Math.max(0, rows.size() - 1));
+                  list.setSelection(pos);
+                  updatePreview(pos);
+                  status.setText(TAB_NAMES[section] + "  •  " + Data.groups.get(section).size() + " قسم  •  "
+                          + Data.items.get(section).size() + (section == Data.LIVE ? " قناة  •  اكتب رقم القناة بالريموت للانتقال لها" : ""));
+              }
+
+              void showItems(int lvl, String title, boolean focus) {
+                  level = lvl;
+                  itemsTitle = title;
+                  backBtn.setVisibility(View.VISIBLE);
+                  backBtn.setText(lvl == LV_EPISODES ? "⬅  رجوع للمسلسلات" : (searchMode ? "⬅  إلغاء البحث" : "⬅  رجوع للأقسام"));
+                  rows.clear();
+                  for (int i = 0; i < shown.size(); i++) {
+                      Channel ch = shown.get(i);
+                      String text = (section == Data.LIVE && lvl == LV_ITEMS) ? (i + 1) + ".  " + ch.name : ch.name;
+                      rows.add(new IconAdapter.Row(text, ch.logo, lvl == LV_EPISODES ? "▶" : TAB_EMOJI[section]));
+                  }
+                  adapter.notifyDataSetChanged();
+                  list.setSelection(0);
+                  updatePreview(0);
+                  status.setText(title + "  •  " + shown.size());
+                  if (focus) list.requestFocus();
+              }
+
+              void setPreview(String img, String emoji, String title, String sub) {
+                  if (img != null && !img.isEmpty()) {
+                      pvEmoji.setVisibility(View.GONE);
+                      pvImage.setVisibility(View.VISIBLE);
+                      Glide.with(this).load(img).fitCenter().into(pvImage);
+                  } else {
+                      Glide.with(this).clear(pvImage);
+                      pvImage.setImageDrawable(null);
+                      pvImage.setVisibility(View.GONE);
+                      pvEmoji.setVisibility(View.VISIBLE);
+                      pvEmoji.setText(emoji == null ? "" : emoji);
+                  }
+                  pvTitle.setText(title);
+                  pvSub.setText(sub);
+              }
+
+              void updatePreview(int pos) {
+                  if (pos < 0 || pos >= rows.size()) return;
+                  if (level == LV_GROUPS) {
+                      IconAdapter.Row r = rows.get(pos);
+                      setPreview(r.icon, r.emoji, r.text, "اضغط OK لفتح القسم");
+                  } else if (pos < shown.size()) {
+                      Channel ch = shown.get(pos);
+                      String sub;
+                      if (level == LV_EPISODES) sub = savedTitle;
+                      else if (section == Data.LIVE) sub = "قناة رقم " + (pos + 1) + "  •  " + ch.group;
+                      else if (section == Data.SERIES) sub = ch.group + "  •  اضغط OK لعرض الحلقات";
+                      else sub = ch.group;
+                      setPreview(ch.logo, level == LV_EPISODES ? "▶" : TAB_EMOJI[section], ch.name, sub);
+                  }
+              }
+
+              // ---------- التنقل ----------
+
+              void openRow(int pos) {
+                  if (pos < 0 || pos >= rows.size()) return;
+                  if (level == LV_GROUPS) {
+                      openGroup(pos);
+                  } else if (level == LV_ITEMS && section == Data.SERIES) {
+                      openSeries(pos);
+                  } else {
+                      play(shown, pos, section != Data.LIVE);
+                  }
+              }
+
+              void openGroup(int pos) {
+                  lastGroupPos = pos;
+                  String key = groupKeys.get(pos);
                   List<Channel> src = Data.items.get(section);
                   shown.clear();
-                  String q = norm(query());
-                  if (!q.isEmpty()) {
-                      String[] words = q.split("\\s+");
-                      for (Channel ch : src) {
-                          String n = norm(ch.name);
-                          boolean ok = true;
-                          for (String w : words) {
-                              if (!n.contains(w)) {
-                                  ok = false;
-                                  break;
-                              }
-                          }
-                          if (ok) shown.add(ch);
-                      }
-                  } else if (selectedGroup <= 0) {
+                  if (KEY_ALL.equals(key)) {
                       shown.addAll(src);
-                  } else if (section != Data.LIVE && selectedGroup == 1) {
+                  } else if (KEY_NEW.equals(key)) {
                       List<Channel> tmp = new ArrayList<>(src);
                       Collections.sort(tmp, (a, b) -> Long.compare(b.added, a.added));
                       shown.addAll(tmp.subList(0, Math.min(NEWEST_COUNT, tmp.size())));
                   } else {
-                      String g = groupNames.get(selectedGroup);
-                      for (Channel ch : src) if (g.equals(ch.group)) shown.add(ch);
+                      for (Channel ch : src) if (key.equals(ch.group)) shown.add(ch);
                   }
-                  fillRows();
-                  if (!q.isEmpty()) {
-                      status.setText("نتائج البحث: " + shown.size());
-                  } else if (Data.loaded[section]) {
-                      status.setText(TAB_NAMES[section] + "  •  " + Data.groups.get(section).size() + " قسم  •  "
-                              + src.size() + (section == Data.LIVE ? " قناة  •  اكتب رقم القناة بالريموت للانتقال لها" : ""));
-                  }
+                  showItems(LV_ITEMS, groupLabel(key), true);
               }
 
-              void fillRows() {
-                  rowNames.clear();
-                  for (int i = 0; i < shown.size(); i++) {
-                      String n = shown.get(i).name;
-                      rowNames.add(section == Data.LIVE && !inEpisodes ? (i + 1) + ".  " + n : n);
-                  }
-                  channelAdapter.notifyDataSetChanged();
-                  channelList.setSelection(0);
-              }
-
-              void openItem(int pos) {
-                  if (pos < 0 || pos >= shown.size()) return;
-                  if (section == Data.SERIES && !inEpisodes) {
-                      openSeries(shown.get(pos));
-                  } else {
-                      play(pos, section != Data.LIVE);
-                  }
-              }
-
-              void play(int pos, boolean vod) {
-                  Data.current.clear();
-                  Data.current.addAll(shown);
-                  Intent i = new Intent(this, PlayerActivity.class);
-                  i.putExtra("index", pos);
-                  i.putExtra("vod", vod);
-                  startActivity(i);
-              }
-
-              void openSeries(final Channel series) {
+              void openSeries(final int pos) {
+                  final Channel series = shown.get(pos);
                   status.setText("جاري تحميل حلقات: " + series.name + "...");
                   final Account acc = Account.read(this);
+                  final int sec = section;
                   new Thread(() -> {
                       try {
                           final List<Channel> eps = Loader.loadEpisodes(acc, series.seriesId);
                           ui.post(() -> {
-                              if (section != Data.SERIES) return;
-                              inEpisodes = true;
+                              if (section != sec || level != LV_ITEMS) return;
+                              savedItems.clear();
+                              savedItems.addAll(shown);
+                              savedTitle = series.name;
+                              savedPos = pos;
+                              for (Channel e : eps) if (e.logo == null || e.logo.isEmpty()) e.logo = series.logo;
                               shown.clear();
                               shown.addAll(eps);
-                              fillRows();
-                              status.setText(series.name + "  •  " + eps.size() + " حلقة  •  زر الرجوع يرجعك للمسلسلات");
-                              channelList.requestFocus();
+                              showItems(LV_EPISODES, series.name, true);
                           });
                       } catch (Exception e) {
                           final String msg = e.getMessage();
@@ -1064,14 +1408,68 @@ jobs:
                   }).start();
               }
 
+              void goBack() {
+                  if (level == LV_EPISODES) {
+                      shown.clear();
+                      shown.addAll(savedItems);
+                      String t = searchMode ? "نتائج البحث" : groupLabel(groupKeys.get(lastGroupPos));
+                      showItems(LV_ITEMS, t, true);
+                      list.setSelection(savedPos);
+                      updatePreview(savedPos);
+                  } else if (level == LV_ITEMS) {
+                      if (searchMode) {
+                          searchMode = false;
+                          search.setText("");
+                      }
+                      showGroups();
+                      list.requestFocus();
+                  } else {
+                      finish();
+                  }
+              }
+
+              void runSearch() {
+                  if (!Data.loaded[section]) return;
+                  String q = norm(query());
+                  if (q.isEmpty()) {
+                      if (searchMode) showGroups();
+                      return;
+                  }
+                  String[] words = q.split("\\s+");
+                  shown.clear();
+                  for (Channel ch : Data.items.get(section)) {
+                      String n = norm(ch.name);
+                      boolean ok = true;
+                      for (String w : words) {
+                          if (!n.contains(w)) {
+                              ok = false;
+                              break;
+                          }
+                      }
+                      if (ok) shown.add(ch);
+                  }
+                  searchMode = true;
+                  showItems(LV_ITEMS, "نتائج البحث", false);
+              }
+
+              void play(List<Channel> src, int pos, boolean vod) {
+                  Data.current.clear();
+                  Data.current.addAll(src);
+                  Intent i = new Intent(this, PlayerActivity.class);
+                  i.putExtra("index", pos);
+                  i.putExtra("vod", vod);
+                  startActivity(i);
+              }
+
               // كتابة رقم القناة بالريموت مثل الرسيفر
               void jumpToNumber() {
                   int n = (int) Loader.num(digits);
                   digits = "";
-                  if (section != Data.LIVE || inEpisodes) return;
-                  if (n >= 1 && n <= shown.size()) {
-                      channelList.setSelection(n - 1);
-                      play(n - 1, false);
+                  if (section != Data.LIVE) return;
+                  List<Channel> target = (level == LV_ITEMS && !searchMode) ? shown : Data.items.get(Data.LIVE);
+                  if (n >= 1 && n <= target.size()) {
+                      if (target == shown) list.setSelection(n - 1);
+                      play(new ArrayList<>(target), n - 1, false);
                   } else {
                       status.setText("ما فيه قناة بهالرقم");
                   }
@@ -1080,8 +1478,7 @@ jobs:
               @Override
               public boolean onKeyDown(int keyCode, KeyEvent e) {
                   boolean typing = getCurrentFocus() instanceof EditText;
-                  if (!typing && section == Data.LIVE && !inEpisodes
-                          && keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
+                  if (!typing && section == Data.LIVE && keyCode >= KeyEvent.KEYCODE_0 && keyCode <= KeyEvent.KEYCODE_9) {
                       if (digits.length() < 5) digits += (char) ('0' + keyCode - KeyEvent.KEYCODE_0);
                       status.setText("رقم القناة: " + digits);
                       ui.removeCallbacks(jumpRun);
@@ -1097,14 +1494,12 @@ jobs:
 
               @Override
               public void onBackPressed() {
-                  if (inEpisodes) {
-                      rebuild();
-                      channelList.requestFocus();
+                  if (getCurrentFocus() instanceof EditText && level == LV_GROUPS) {
+                      list.requestFocus();
                       return;
                   }
-                  if (!query().isEmpty()) {
-                      search.setText("");
-                      rebuild();
+                  if (level != LV_GROUPS) {
+                      goBack();
                       return;
                   }
                   super.onBackPressed();
@@ -1349,59 +1744,26 @@ jobs:
           }
           EOF
 
-          cat > app/src/main/java/com/my/iptv/TextAdapter.java <<'EOF'
-          package com.my.iptv;
-
-          import android.content.Context;
-          import android.graphics.Color;
-          import android.text.TextUtils;
-          import android.view.View;
-          import android.view.ViewGroup;
-          import android.widget.BaseAdapter;
-          import android.widget.TextView;
-
-          import java.util.List;
-
-          public class TextAdapter extends BaseAdapter {
-              private final Context ctx;
-              private final List<String> items;
-              private final float size;
-              public int highlight = -1;
-
-              public TextAdapter(Context ctx, List<String> items, float size) {
-                  this.ctx = ctx;
-                  this.items = items;
-                  this.size = size;
-              }
-
-              @Override public int getCount() { return items.size(); }
-              @Override public Object getItem(int p) { return items.get(p); }
-              @Override public long getItemId(int p) { return p; }
-
-              @Override
-              public View getView(int p, View cv, ViewGroup parent) {
-                  TextView tv;
-                  if (cv instanceof TextView) {
-                      tv = (TextView) cv;
-                  } else {
-                      tv = new TextView(ctx);
-                      int pad = (int) (12 * ctx.getResources().getDisplayMetrics().density);
-                      tv.setPadding(pad * 2, pad, pad * 2, pad);
-                      tv.setTextColor(Color.WHITE);
-                      tv.setTextSize(size);
-                      tv.setSingleLine(true);
-                      tv.setEllipsize(TextUtils.TruncateAt.END);
-                  }
-                  tv.setText(items.get(p));
-                  tv.setBackgroundColor(p == highlight ? 0xFF1E3A8A : Color.TRANSPARENT);
-                  return tv;
-              }
-          }
-          EOF
+      - name: Custom app icon (upload icon.png or icon.jpg to the repo)
+        working-directory: p
+        run: |
+          IMG=$(ls ../icon.png ../icon.jpg ../icon.jpeg ../icon.webp ../Icon.png ../Icon.jpg ../ICON.PNG ../ICON.JPG 2>/dev/null | head -1)
+          if [ -n "$IMG" ]; then
+            echo "Using $IMG as app icon"
+            command -v convert >/dev/null || (sudo apt-get update && sudo apt-get install -y imagemagick)
+            rm -f app/src/main/res/drawable/icon.xml app/src/main/res/drawable/banner.xml
+            mkdir -p app/src/main/res/drawable-nodpi
+            convert "$IMG[0]" -auto-orient -resize 512x512^ -gravity center -extent 512x512 app/src/main/res/drawable-nodpi/icon.png
+            convert "$IMG[0]" -auto-orient -resize 640x360 -background "#101820" -gravity center -extent 640x360 app/src/main/res/drawable-nodpi/banner.png
+          else
+            echo "No icon.png in repo - using default icon"
+          fi
 
       - name: Build APK
         working-directory: p
-        run: gradle assembleDebug --no-daemon --stacktrace
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+        run: KEYSTORE_PATH="$GITHUB_WORKSPACE/keystore/iptv.jks" gradle assembleDebug --no-daemon --stacktrace
 
       - name: Publish release
         env:
