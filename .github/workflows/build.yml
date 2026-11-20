@@ -1655,17 +1655,26 @@ jobs:
                   search.setHint("🔍   ابحث عن قناة، فيلم، مسلسل...");
                   search.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
                   search.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
+                  root.addView(top);
+
+                  // السطر الثاني: البحث وجنبه التحديث والإعدادات
+                  // (قبل كانت كلها في سطر واحد، فخانة البحث تنضغط لين تختفي على شاشة التلفزيون)
+                  LinearLayout bar2 = new LinearLayout(this);
+                  bar2.setOrientation(LinearLayout.HORIZONTAL);
+                  bar2.setGravity(Gravity.CENTER_VERTICAL);
                   LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1);
-                  sp.setMargins(dp(20), 0, dp(20), 0);
-                  top.addView(search, sp);
+                  sp.setMargins(0, 0, dp(12), 0);
+                  bar2.addView(search, sp);
 
                   TextView refresh = Ui.chip(this, "⟳  تحديث");
                   TextView settings = Ui.chip(this, "⚙  الإعدادات");
                   LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
                   bp.setMargins(dp(6), 0, dp(6), 0);
-                  top.addView(refresh, bp);
-                  top.addView(settings, new LinearLayout.LayoutParams(bp));
-                  root.addView(top);
+                  bar2.addView(refresh, bp);
+                  bar2.addView(settings, new LinearLayout.LayoutParams(bp));
+                  LinearLayout.LayoutParams b2p = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  b2p.setMargins(0, dp(14), 0, 0);
+                  root.addView(bar2, b2p);
 
                   status = Ui.text(this, "", 16, Ui.SUB, Ui.MEDIUM);
                   status.setPadding(dp(4), dp(14), dp(4), dp(10));
