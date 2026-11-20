@@ -145,6 +145,7 @@ jobs:
                       android:windowSoftInputMode="adjustResize" />
                   <activity android:name=".SettingsActivity" android:exported="false" />
                   <activity android:name=".SeriesActivity" android:exported="false" />
+                  <activity android:name=".GridActivity" android:exported="false" />
                   <receiver android:name=".BootReceiver" android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.BOOT_COMPLETED" />
@@ -520,13 +521,22 @@ jobs:
                   public final List<Channel> items;
                   public final boolean big;
                   public final boolean cw;
+                  // القسم اللي جاي منه الصف (-1 = نفس قسم الشاشة) — نحتاجه في البحث الشامل
+                  public final int section;
+                  // يطلع بطاقة «عرض الكل» أول الصف
+                  public boolean showAll;
 
                   public Row(String title, String key, List<Channel> items, boolean big, boolean cw) {
+                      this(title, key, items, big, cw, -1);
+                  }
+
+                  public Row(String title, String key, List<Channel> items, boolean big, boolean cw, int section) {
                       this.title = title;
                       this.key = key;
                       this.items = items;
                       this.big = big;
                       this.cw = cw;
+                      this.section = section;
                   }
               }
 
@@ -534,6 +544,8 @@ jobs:
                   void onCard(Row row, int pos);
 
                   void onCardLong(Row row, int pos);
+
+                  void onShowAll(Row row);
               }
 
               // ---------- الصفوف ----------
@@ -605,12 +617,22 @@ jobs:
                   final int section;
                   final Listener listener;
                   final long newSince = System.currentTimeMillis() / 1000 - 7 * 24 * 3600;
+                  static final int TYPE_ALL = 2;
 
                   CardsAdapter(Context ctx, Row row, int section, Listener listener) {
                       this.ctx = ctx;
                       this.row = row;
-                      this.section = section;
+                      this.section = row.section >= 0 ? row.section : section;
                       this.listener = listener;
+                  }
+
+                  boolean hasAll() {
+                      return row.showAll && !row.items.isEmpty();
+                  }
+
+                  // رقم العنصر في القائمة (بعد بطاقة «عرض الكل» إذا موجودة)
+                  int itemIndex(int adapterPos) {
+                      return adapterPos - (hasAll() ? 1 : 0);
                   }
 
                   static class VH extends RecyclerView.ViewHolder {
@@ -628,11 +650,45 @@ jobs:
 
                   @Override
                   public int getItemViewType(int position) {
+                      if (hasAll() && position == 0) return TYPE_ALL;
                       return row.big ? 1 : 0;
+                  }
+
+                  // بطاقة «عرض الكل»: نفس حجم البوستر وتفتح كل عناصر الصف في شبكة
+                  VH createAllCard() {
+                      int w = Ui.dp(ctx, row.big ? 210 : 150);
+                      int hgt = Ui.dp(ctx, row.big ? 315 : 225);
+                      LinearLayout root = new LinearLayout(ctx);
+                      root.setOrientation(LinearLayout.VERTICAL);
+                      root.setClipChildren(false);
+                      root.setLayoutParams(new RecyclerView.LayoutParams(w + Ui.dp(ctx, 16), RecyclerView.LayoutParams.WRAP_CONTENT));
+                      root.setPadding(Ui.dp(ctx, 8), 0, Ui.dp(ctx, 8), 0);
+                      VH h = new VH(root);
+                      h.card = new FrameLayout(ctx);
+                      StateListDrawable bg = new StateListDrawable();
+                      bg.addState(new int[]{android.R.attr.state_focused}, Ui.accent(ctx, 14));
+                      bg.addState(new int[]{}, Ui.stroke(ctx, Ui.CARD, 14, Ui.GLASS2, 2));
+                      h.card.setBackground(bg);
+                      h.card.setFocusable(true);
+                      h.card.setClickable(true);
+                      h.label = Ui.text(ctx, "", 20, Ui.TEXT, Ui.BOLD);
+                      h.label.setGravity(Gravity.CENTER);
+                      h.card.addView(h.label, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+                      root.addView(h.card, new LinearLayout.LayoutParams(w, hgt));
+                      h.title = Ui.text(ctx, "", 14, Ui.SUB, Ui.MEDIUM);
+                      root.addView(h.title, new LinearLayout.LayoutParams(w, LinearLayout.LayoutParams.WRAP_CONTENT));
+                      h.card.setOnFocusChangeListener((v, has) ->
+                              v.animate().scaleX(has ? 1.1f : 1f).scaleY(has ? 1.1f : 1f).setDuration(150).start());
+                      final VH fh = h;
+                      h.card.setOnClickListener(v -> {
+                          if (fh.row != null) listener.onShowAll(fh.row);
+                      });
+                      return h;
                   }
 
                   @Override
                   public VH onCreateViewHolder(ViewGroup parent, int type) {
+                      if (type == TYPE_ALL) return createAllCard();
                       boolean big = type == 1;
                       int w = Ui.dp(ctx, big ? 210 : 150);
                       int hgt = Ui.dp(ctx, big ? 315 : 225);
@@ -656,11 +712,17 @@ jobs:
                       h.card.setClickable(true);
                       h.card.setLongClickable(true);
 
-                      h.emoji = Ui.text(ctx, section == Data.SERIES ? "🎞️" : "🎬", 40, Ui.TEXT, null);
+                      h.emoji = Ui.text(ctx, section == Data.SERIES ? "🎞️" : section == Data.LIVE ? "📺" : "🎬", 40, Ui.TEXT, null);
                       h.emoji.setGravity(Gravity.CENTER);
                       h.card.addView(h.emoji, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
                       h.img = new ImageView(ctx);
-                      h.img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                      if (section == Data.LIVE) {
+                          // شعارات القنوات ما تنقص من الأطراف
+                          h.img.setScaleType(ImageView.ScaleType.FIT_CENTER);
+                          h.img.setPadding(Ui.dp(ctx, 16), Ui.dp(ctx, 16), Ui.dp(ctx, 16), Ui.dp(ctx, 16));
+                      } else {
+                          h.img.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                      }
                       h.card.addView(h.img, new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
                       h.shade = new View(ctx);
@@ -708,11 +770,11 @@ jobs:
                       });
                       h.card.setOnClickListener(v -> {
                           int p = fh.getBindingAdapterPosition();
-                          if (p != RecyclerView.NO_POSITION && fh.row != null) listener.onCard(fh.row, p);
+                          if (p != RecyclerView.NO_POSITION && fh.row != null) listener.onCard(fh.row, itemIndex(p));
                       });
                       h.card.setOnLongClickListener(v -> {
                           int p = fh.getBindingAdapterPosition();
-                          if (p != RecyclerView.NO_POSITION && fh.row != null) listener.onCardLong(fh.row, p);
+                          if (p != RecyclerView.NO_POSITION && fh.row != null) listener.onCardLong(fh.row, itemIndex(p));
                           return true;
                       });
                       return h;
@@ -721,7 +783,11 @@ jobs:
                   @Override
                   public void onBindViewHolder(VH h, int pos) {
                       h.row = row;
-                      Channel ch = row.items.get(pos);
+                      if (getItemViewType(pos) == TYPE_ALL) {
+                          h.label.setText("▦\nعرض الكل\n(" + row.items.size() + ")");
+                          return;
+                      }
+                      Channel ch = row.items.get(itemIndex(pos));
                       if (ch.logo != null && !ch.logo.isEmpty()) {
                           h.img.setVisibility(View.VISIBLE);
                           Glide.with(ctx).load(ch.logo).centerCrop().into(h.img);
@@ -759,7 +825,7 @@ jobs:
 
                   @Override
                   public int getItemCount() {
-                      return row.items.size();
+                      return row.items.size() + (hasAll() ? 1 : 0);
                   }
               }
           }
@@ -1504,6 +1570,9 @@ jobs:
               final Map<String, String> groupIcon = new HashMap<>();
               final Map<String, Integer> groupCount = new HashMap<>();
               final boolean[] loading = new boolean[3];
+              final boolean[] failed = new boolean[3];
+              // البحث الشامل (قنوات + أفلام + مسلسلات) شغال
+              boolean globalSearch = false;
 
               int section = Data.LIVE;
               int level = LV_GROUPS;
@@ -1734,7 +1803,8 @@ jobs:
                   });
                   search.setOnEditorActionListener((v, actionId, e) -> {
                       hideKeyboard();
-                      list.requestFocus();
+                      if (home.getVisibility() == View.VISIBLE) home.requestFocus();
+                      else list.requestFocus();
                       return true;
                   });
 
@@ -1793,6 +1863,8 @@ jobs:
                   searchMode = false;
                   for (int i = 0; i < 3; i++) tabs[i].setSelected(i == sec);
                   if (!query().isEmpty()) search.setText("");
+                  ui.removeCallbacks(searchRun);
+                  globalSearch = false;
                   groupKeys.clear();
                   rows.clear();
                   shown.clear();
@@ -1819,18 +1891,22 @@ jobs:
                           final Loader.Result r = Loader.loadSection(sec, acc);
                           ui.post(() -> {
                               loading[sec] = false;
+                              failed[sec] = false;
                               Data.groups.get(sec).clear();
                               Data.groups.get(sec).addAll(r.groups);
                               Data.items.get(sec).clear();
                               Data.items.get(sec).addAll(r.items);
                               Data.loaded[sec] = true;
                               if (sec == section) onDataReady();
+                              else if (globalSearch) runSearch();
                           });
                       } catch (Exception e) {
                           final String msg = e.getMessage();
                           ui.post(() -> {
                               loading[sec] = false;
-                              if (sec == section) status.setText("تعذر التحميل: " + msg + " — اضغط تحديث أو غيّر الحساب من الإعدادات");
+                              failed[sec] = true;
+                              if (sec == section && !globalSearch) status.setText("تعذر التحميل: " + msg + " — اضغط تحديث أو غيّر الحساب من الإعدادات");
+                              else if (globalSearch) runSearch();
                           });
                       }
                   }).start();
@@ -1871,15 +1947,19 @@ jobs:
                   refreshVisible();
                   if (section != Data.LIVE) {
                       buildHome();
-                      home.post(() -> home.requestFocus());
+                      if (!globalSearch) home.post(() -> home.requestFocus());
                       return;
                   }
                   rebuildGroupKeys();
                   String def = favKeys.isEmpty() ? KEY_ALL : KEY_FAV;
                   lastGroupPos = Math.max(0, groupKeys.indexOf(def));
                   showGroups();
+                  if (globalSearch) {
+                      runSearch();
+                      return;
+                  }
                   list.requestFocus();
-                  if (section == Data.LIVE) maybeAutoPlay();
+                  maybeAutoPlay();
               }
 
               // يفتح آخر قناة كنت عليها
@@ -2287,33 +2367,82 @@ jobs:
                   }
               }
 
+              // ---------- البحث الشامل: القنوات والأفلام والمسلسلات مع بعض ----------
+
               void runSearch() {
-                  if (!Data.loaded[section]) return;
-                  if (section != Data.LIVE) {
-                      buildHome();
-                      return;
-                  }
                   String q = norm(query());
                   if (q.isEmpty()) {
-                      if (searchMode) showGroups();
+                      if (!globalSearch) return;
+                      globalSearch = false;
+                      endSearch();
                       return;
                   }
+                  globalSearch = true;
+                  // نحمّل الأقسام اللي ما تحمّلت عشان البحث يشملها
+                  for (int s = 0; s < 3; s++) if (!Data.loaded[s] && !failed[s]) load(s);
+                  buildSearch(q);
+              }
+
+              static boolean matches(String name, String[] words) {
+                  String n = norm(name == null ? "" : name);
+                  for (String w : words) if (!n.contains(w)) return false;
+                  return true;
+              }
+
+              void buildSearch(String q) {
                   String[] words = q.split("\\s+");
-                  shown.clear();
-                  for (Channel ch : visible) {
-                      String n = norm(ch.name);
-                      boolean ok = true;
-                      for (String w : words) {
-                          if (!n.contains(w)) {
-                              ok = false;
-                              break;
+                  homeRows.clear();
+                  int total = 0;
+                  boolean pending = false;
+                  // القسم الحالي أول، بعده الباقي
+                  int[] order = {section, (section + 1) % 3, (section + 2) % 3};
+                  for (int s : order) {
+                      if (!Data.loaded[s]) {
+                          if (loading[s]) pending = true;
+                          continue;
+                      }
+                      Set<String> hid = Store.hidden(this, s);
+                      List<Channel> res = new ArrayList<>();
+                      for (Channel ch : Data.items.get(s)) {
+                          if (hid.contains(ch.group)) continue;
+                          if (matches(ch.name, words)) {
+                              res.add(ch);
+                              if (res.size() >= 500) break;
                           }
                       }
-                      if (ok) shown.add(ch);
+                      if (res.isEmpty()) continue;
+                      total += res.size();
+                      Home.Row r = new Home.Row(TAB_EMOJI[s] + "  " + TAB_NAMES[s] + "   (" + res.size() + ")",
+                              "\u0000search" + s, res, false, false, s);
+                      r.showAll = res.size() > 6;
+                      homeRows.add(r);
                   }
-                  searchMode = true;
-                  currentKey = KEY_ALL;
-                  showItems(LV_ITEMS, "نتائج البحث", false);
+                  stopPreview();
+                  liveBody.setVisibility(View.GONE);
+                  home.setVisibility(View.VISIBLE);
+                  homeAdapter.notifyDataSetChanged();
+                  String msg = total == 0 && !pending ? "🔍  ما لقيت شي" : "🔍  نتائج البحث: " + total;
+                  if (pending) msg += "  •  جاري تحميل باقي الأقسام...";
+                  status.setText(msg + "  •  زر الرجوع يلغي البحث");
+              }
+
+              // نرجع للشاشة العادية بعد ما ينمسح البحث
+              void endSearch() {
+                  homeRows.clear();
+                  homeAdapter.notifyDataSetChanged();
+                  if (section == Data.LIVE) {
+                      home.setVisibility(View.GONE);
+                      liveBody.setVisibility(View.VISIBLE);
+                      if (Data.loaded[section]) showGroups();
+                  } else if (Data.loaded[section]) {
+                      buildHome();
+                  }
+              }
+
+              // بعد تغيير المفضلة أو الإخفاء
+              void refreshHomeView() {
+                  if (globalSearch) buildSearch(norm(query()));
+                  else if (section != Data.LIVE) buildHome();
               }
 
               // ---------- واجهة الأفلام والمسلسلات ----------
@@ -2323,23 +2452,7 @@ jobs:
                   String q = norm(query());
                   String unit = section == Data.MOVIES ? " فيلم" : " مسلسل";
                   if (!q.isEmpty()) {
-                      String[] words = q.split("\\s+");
-                      List<Channel> res = new ArrayList<>();
-                      for (Channel ch : visible) {
-                          String n = norm(ch.name);
-                          boolean ok = true;
-                          for (String w : words) {
-                              if (!n.contains(w)) {
-                                  ok = false;
-                                  break;
-                              }
-                          }
-                          if (ok) res.add(ch);
-                          if (res.size() >= 300) break;
-                      }
-                      homeRows.add(new Home.Row("🔍  نتائج البحث (" + res.size() + ")", KEY_ALL, res, false, false));
-                      homeAdapter.notifyDataSetChanged();
-                      status.setText("نتائج البحث: " + res.size() + "  •  زر الرجوع يلغي البحث");
+                      buildSearch(q);
                       return;
                   }
                   List<Channel> newest = new ArrayList<>(visible);
@@ -2357,10 +2470,16 @@ jobs:
                   }
                   if (!cw.isEmpty()) homeRows.add(new Home.Row("▶️  أكمل المشاهدة", KEY_CW, cw, false, true));
                   List<Channel> favs = itemsFor(KEY_FAV);
-                  if (!favs.isEmpty()) homeRows.add(new Home.Row("⭐  المفضلة", KEY_FAV, favs, false, false));
+                  if (!favs.isEmpty()) {
+                      Home.Row fr = new Home.Row("⭐  المفضلة", KEY_FAV, favs, false, false);
+                      fr.showAll = favs.size() > 6;
+                      homeRows.add(fr);
+                  }
                   if (newest.size() > featured) {
-                      homeRows.add(new Home.Row("🆕  الأحدث", KEY_NEW,
-                              new ArrayList<>(newest.subList(featured, Math.min(featured + 60, newest.size()))), false, false));
+                      Home.Row nr = new Home.Row("🆕  الأحدث", KEY_NEW,
+                              new ArrayList<>(newest.subList(featured, Math.min(featured + NEWEST_COUNT, newest.size()))), false, false);
+                      nr.showAll = nr.items.size() > 6;
+                      homeRows.add(nr);
                   }
                   Map<String, List<Channel>> byGroup = new HashMap<>();
                   for (Channel ch : visible) {
@@ -2377,7 +2496,9 @@ jobs:
                       List<Channel> l = byGroup.get(g);
                       if (l == null || l.isEmpty()) continue;
                       String flag = Flags.find(g);
-                      homeRows.add(new Home.Row((flag == null ? "" : flag + "  ") + g + "   (" + l.size() + ")", g, l, false, false));
+                      Home.Row gr = new Home.Row((flag == null ? "" : flag + "  ") + g + "   (" + l.size() + ")", g, l, false, false);
+                      gr.showAll = l.size() > 6;
+                      homeRows.add(gr);
                   }
                   homeAdapter.notifyDataSetChanged();
                   status.setText(TAB_NAMES[section] + "  •  " + visible.size() + unit + "  •  ضغطة طويلة على أي بوستر للخيارات");
@@ -2425,7 +2546,8 @@ jobs:
                   }
                   if (ri < 0) ri = Math.min(focusRow, homeRows.size() - 1);
                   final int row = ri;
-                  final int card = Math.max(0, Math.min(focusCard, homeRows.get(ri).items.size() - 1));
+                  Home.Row fr = homeRows.get(ri);
+                  final int card = Math.max(0, Math.min(focusCard, fr.items.size() - 1 + (fr.showAll ? 1 : 0)));
                   home.scrollToPosition(row);
                   home.post(() -> {
                       RecyclerView.ViewHolder vh = home.findViewHolderForAdapterPosition(row);
@@ -2444,41 +2566,48 @@ jobs:
               @Override
               public void onCard(Home.Row row, int pos) {
                   if (pos < 0 || pos >= row.items.size()) return;
-                  Channel ch = row.items.get(pos);
-                  if (section == Data.MOVIES) {
-                      play(row.items, pos, true, false);
-                  } else if (row.cw) {
-                      playEpisodeFromCw(ch);
-                  } else {
-                      SeriesActivity.series = ch;
-                      startActivity(new Intent(this, SeriesActivity.class));
+                  int sec = row.section >= 0 ? row.section : section;
+                  if (row.cw && sec == Data.SERIES) {
+                      playEpisodeFromCw(row.items.get(pos));
+                      return;
                   }
+                  releasePreview();
+                  Open.card(this, sec, row.items, pos);
+              }
+
+              @Override
+              public void onShowAll(Home.Row row) {
+                  GridActivity.source = row;
+                  GridActivity.sourceSection = row.section >= 0 ? row.section : section;
+                  releasePreview();
+                  startActivity(new Intent(this, GridActivity.class));
               }
 
               @Override
               public void onCardLong(final Home.Row row, final int pos) {
                   if (pos < 0 || pos >= row.items.size()) return;
                   final Channel ch = row.items.get(pos);
+                  final int sec = row.section >= 0 ? row.section : section;
                   List<String> opts = new ArrayList<>();
                   final List<Runnable> acts = new ArrayList<>();
                   if (row.cw) {
                       opts.add("✖  إزالة من «أكمل المشاهدة»");
                       acts.add(() -> {
-                          Store.removeCw(this, section, ch.url);
+                          Store.removeCw(this, sec, ch.url);
                           Store.setPos(this, ch.url, 0);
                       });
                   } else {
-                      boolean fav = favKeys.contains(Store.keyOf(ch));
+                      boolean fav = Store.isFav(this, sec, ch);
                       opts.add(fav ? "✖  إزالة من المفضلة" : "⭐  إضافة للمفضلة");
                       acts.add(() -> {
-                          if (fav) Store.removeFav(this, section, ch);
-                          else Store.addFav(this, section, ch);
+                          if (fav) Store.removeFav(this, sec, ch);
+                          else Store.addFav(this, sec, ch);
                           toast(fav ? "انشالت من المفضلة" : "انضافت للمفضلة");
                       });
                       if (ch.group != null && !Loader.NO_GROUP.equals(ch.group)) {
                           opts.add("🙈  إخفاء قسم «" + ch.group + "»");
                           acts.add(() -> {
-                              Store.setHidden(this, section, ch.group, true);
+                              Store.setHidden(this, sec, ch.group, true);
                               toast("انخفى القسم — ترجعه من الإعدادات");
                           });
                       }
@@ -2489,7 +2618,8 @@ jobs:
                               rememberFocus();
                               acts.get(w).run();
                               refreshVisible();
-                              buildHome();
+                              if (section == Data.LIVE) rebuildGroupKeys();
+                              refreshHomeView();
                               restoreFocus();
                           })
                           .show();
@@ -2579,14 +2709,7 @@ jobs:
 
               void play(List<Channel> src, int pos, boolean vod, boolean series) {
                   releasePreview();
-                  Data.current.clear();
-                  Data.current.addAll(src);
-                  Intent i = new Intent(this, PlayerActivity.class);
-                  i.putExtra("index", pos);
-                  i.putExtra("vod", vod);
-                  i.putExtra("series", series);
-                  i.putExtra("section", section);
-                  startActivity(i);
+                  Open.play(this, src, pos, section, vod, series);
               }
 
               void jumpToNumber() {
@@ -2605,7 +2728,7 @@ jobs:
               @Override
               protected void onPause() {
                   super.onPause();
-                  if (section != Data.LIVE) rememberFocus();
+                  if (home != null && home.getVisibility() == View.VISIBLE) rememberFocus();
                   ui.removeCallbacks(clockRun);
               }
 
@@ -2616,7 +2739,17 @@ jobs:
                       ui.removeCallbacks(clockRun);
                       clockRun.run();
                   }
-                  if (adapter == null || !Data.loaded[section]) return;
+                  if (adapter == null) return;
+                  if (globalSearch) {
+                      if (Data.loaded[section]) {
+                          refreshVisible();
+                          if (section == Data.LIVE) rebuildGroupKeys();
+                      }
+                      buildSearch(norm(query()));
+                      restoreFocus();
+                      return;
+                  }
+                  if (!Data.loaded[section]) return;
                   refreshVisible();
                   if (section != Data.LIVE) {
                       buildHome();
@@ -2653,7 +2786,7 @@ jobs:
                       search.requestFocus();
                       return true;
                   }
-                  if (!typing && keyCode == KeyEvent.KEYCODE_MENU) {
+                  if (!typing && keyCode == KeyEvent.KEYCODE_MENU && liveBody.getVisibility() == View.VISIBLE) {
                       int p = list.getSelectedItemPosition();
                       if (p >= 0) onLongPress(p);
                       return true;
@@ -2663,12 +2796,15 @@ jobs:
 
               @Override
               public void onBackPressed() {
+                  if (search != null && (globalSearch || !query().isEmpty())) {
+                      search.setText("");
+                      ui.removeCallbacks(searchRun);
+                      runSearch();
+                      if (section == Data.LIVE) list.requestFocus();
+                      else home.requestFocus();
+                      return;
+                  }
                   if (section != Data.LIVE) {
-                      if (!query().isEmpty()) {
-                          search.setText("");
-                          home.requestFocus();
-                          return;
-                      }
                       if (getCurrentFocus() instanceof EditText) {
                           home.requestFocus();
                           return;
@@ -3153,6 +3289,142 @@ jobs:
                       player.release();
                       player = null;
                   }
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/Open.java <<'EOF'
+          package com.my.iptv;
+
+          import android.app.Activity;
+          import android.app.AlertDialog;
+          import android.content.Intent;
+          import android.widget.Toast;
+
+          import java.util.ArrayList;
+          import java.util.List;
+
+          // فتح أي بطاقة (قناة، فيلم، مسلسل) من أي شاشة
+          public class Open {
+              public static void card(Activity a, int sec, List<Channel> items, int pos) {
+                  if (pos < 0 || pos >= items.size()) return;
+                  if (sec == Data.SERIES) {
+                      SeriesActivity.series = items.get(pos);
+                      a.startActivity(new Intent(a, SeriesActivity.class));
+                      return;
+                  }
+                  play(a, items, pos, sec, sec != Data.LIVE, false);
+              }
+
+              public static void play(Activity a, List<Channel> src, int pos, int sec, boolean vod, boolean series) {
+                  Data.current.clear();
+                  Data.current.addAll(src);
+                  Intent i = new Intent(a, PlayerActivity.class);
+                  i.putExtra("index", pos);
+                  i.putExtra("vod", vod);
+                  i.putExtra("series", series);
+                  i.putExtra("section", sec);
+                  a.startActivity(i);
+              }
+
+              // ضغطة طويلة: إضافة أو إزالة من المفضلة
+              public static void favDialog(Activity a, int sec, Channel ch, Runnable after) {
+                  final boolean fav = Store.isFav(a, sec, ch);
+                  List<String> opts = new ArrayList<>();
+                  opts.add(fav ? "✖  إزالة من المفضلة" : "⭐  إضافة للمفضلة");
+                  new AlertDialog.Builder(a)
+                          .setTitle(ch.name)
+                          .setItems(opts.toArray(new String[0]), (d, w) -> {
+                              if (fav) Store.removeFav(a, sec, ch);
+                              else Store.addFav(a, sec, ch);
+                              Toast.makeText(a, fav ? "انشالت من المفضلة" : "انضافت للمفضلة", Toast.LENGTH_SHORT).show();
+                              if (after != null) after.run();
+                          })
+                          .show();
+              }
+          }
+          EOF
+
+          cat > app/src/main/java/com/my/iptv/GridActivity.java <<'EOF'
+          package com.my.iptv;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import androidx.recyclerview.widget.GridLayoutManager;
+          import androidx.recyclerview.widget.RecyclerView;
+
+          // «عرض الكل»: كل عناصر الصف في شبكة بدل ما تمشي يسار يسار
+          public class GridActivity extends Activity implements Home.Listener {
+              static Home.Row source;
+              static int sourceSection;
+
+              Home.Row row;
+              int section;
+              RecyclerView grid;
+              Home.CardsAdapter adapter;
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  if (source == null) {
+                      finish();
+                      return;
+                  }
+                  section = sourceSection;
+                  row = new Home.Row(source.title, source.key, source.items, false, source.cw, section);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setBackground(Ui.background());
+                  int pad = Ui.dp(this, 32);
+                  root.setPadding(pad, Ui.dp(this, 24), pad, 0);
+
+                  TextView title = Ui.text(this, source.title, 26, Ui.TEXT, Ui.BOLD);
+                  title.setPadding(Ui.dp(this, 8), 0, Ui.dp(this, 8), Ui.dp(this, 12));
+                  root.addView(title);
+
+                  float widthDp = getResources().getDisplayMetrics().widthPixels / getResources().getDisplayMetrics().density - 64;
+                  int span = Math.max(2, (int) (widthDp / 166));
+                  grid = new RecyclerView(this);
+                  grid.setLayoutManager(new GridLayoutManager(this, span));
+                  grid.setClipChildren(false);
+                  grid.setClipToPadding(false);
+                  grid.setItemAnimator(null);
+                  grid.setPadding(0, Ui.dp(this, 14), 0, Ui.dp(this, 40));
+                  adapter = new Home.CardsAdapter(this, row, section, this);
+                  grid.setAdapter(adapter);
+                  root.addView(grid, new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1));
+                  setContentView(root);
+
+                  grid.post(() -> {
+                      RecyclerView.ViewHolder vh = grid.findViewHolderForAdapterPosition(0);
+                      if (vh != null && vh.itemView instanceof LinearLayout) ((LinearLayout) vh.itemView).getChildAt(0).requestFocus();
+                  });
+              }
+
+              @Override
+              public void onCard(Home.Row r, int pos) {
+                  Open.card(this, section, r.items, pos);
+              }
+
+              @Override
+              public void onCardLong(Home.Row r, int pos) {
+                  if (pos < 0 || pos >= r.items.size()) return;
+                  Open.favDialog(this, section, r.items.get(pos), null);
+              }
+
+              @Override
+              public void onShowAll(Home.Row r) {
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  // نحدّث شريط التقدم بعد ما ترجع من المشاهدة
+                  if (adapter != null) adapter.notifyDataSetChanged();
               }
           }
           EOF
@@ -3648,6 +3920,10 @@ jobs:
                   putList(c, "fav_" + sec, l);
               }
 
+              public static boolean isFav(Context c, int sec, Channel ch) {
+                  return indexOfKey(favs(c, sec), keyOf(ch)) >= 0;
+              }
+
               public static void removeFav(Context c, int sec, Channel ch) {
                   List<Channel> l = favs(c, sec);
                   int i = indexOfKey(l, keyOf(ch));
@@ -3913,6 +4189,8 @@ jobs:
         run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Publish release
+        # النشر من main بس؛ تشغيل يدوي على فرع ثاني = تجربة بناء بدون نشر
+        if: github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
