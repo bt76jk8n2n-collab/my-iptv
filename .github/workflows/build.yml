@@ -2,6 +2,7 @@ name: Build IPTV APK
 
 on:
   push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -26,18 +27,20 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Signing key (created once, then reused so updates install over the old app)
+      # مفتاح التوقيع يجي من GitHub Secrets (ما ينحفظ في المستودع أبداً):
+      #   KEYSTORE_BASE64   = ملف المفتاح بصيغة base64
+      #   KEYSTORE_PASSWORD = كلمة سر المفتاح
+      - name: Signing key (from repository secrets)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
         run: |
-          if [ ! -f keystore/iptv.jks ]; then
-            mkdir -p keystore
-            keytool -genkeypair -keystore keystore/iptv.jks -alias iptv -keyalg RSA -keysize 2048 \
-              -validity 10000 -storepass iptv123456 -keypass iptv123456 -dname "CN=IPTV"
-            git config user.name "github-actions"
-            git config user.email "github-actions@users.noreply.github.com"
-            git add keystore/iptv.jks
-            git commit -m "Add signing key [skip ci]"
-            git push
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::أضف KEYSTORE_BASE64 و KEYSTORE_PASSWORD في Settings > Secrets and variables > Actions"
+            exit 1
           fi
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
 
       - name: Write project files
         run: |
@@ -61,9 +64,9 @@ jobs:
               signingConfigs {
                   fixed {
                       storeFile file(System.getenv("KEYSTORE_PATH") ?: "none.jks")
-                      storePassword "iptv123456"
+                      storePassword System.getenv("KEYSTORE_PASSWORD")
                       keyAlias "iptv"
-                      keyPassword "iptv123456"
+                      keyPassword System.getenv("KEYSTORE_PASSWORD")
                   }
               }
               buildTypes {
@@ -3880,7 +3883,8 @@ jobs:
         working-directory: p
         env:
           VERSION_CODE: ${{ github.run_number }}
-        run: KEYSTORE_PATH="$GITHUB_WORKSPACE/keystore/iptv.jks" gradle assembleDebug --no-daemon --stacktrace
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: gradle assembleDebug --no-daemon --stacktrace
 
       - name: Publish release
         env:
