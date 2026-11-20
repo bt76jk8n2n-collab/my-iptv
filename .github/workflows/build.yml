@@ -70,8 +70,9 @@ jobs:
                   }
               }
               buildTypes {
-                  debug {
+                  release {
                       signingConfig signingConfigs.fixed
+                      minifyEnabled false
                   }
               }
               compileOptions {
@@ -131,6 +132,7 @@ jobs:
                   android:banner="@drawable/banner"
                   android:usesCleartextTraffic="true"
                   android:supportsRtl="true"
+                  android:allowBackup="false"
                   android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
                   <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
@@ -154,7 +156,8 @@ jobs:
               </application>
           </manifest>
           EOF
-          sed -i "s|__APP_NAME__|$APP_NAME|" app/src/main/AndroidManifest.xml
+          NAME_ESC=$(printf '%s' "$APP_NAME" | sed 's/[&|\\]/\\&/g')
+          sed -i "s|__APP_NAME__|$NAME_ESC|" app/src/main/AndroidManifest.xml
 
           cat > app/src/main/res/drawable/banner.xml <<'EOF'
           <vector xmlns:android="http://schemas.android.com/apk/res/android"
@@ -468,10 +471,8 @@ jobs:
                   for (String[] row : MAP) {
                       for (int k = 1; k < row.length; k++) {
                           String kw = row[k];
-                          boolean arabic = kw.charAt(0) >= 0x0600 && kw.charAt(0) <= 0x06FF;
                           boolean hit;
-                          if (arabic) hit = name.contains(kw);
-                          else if (kw.contains(" ")) hit = low.contains(kw);
+                          if (kw.contains(" ")) hit = low.contains(kw);
                           else hit = words.contains(kw);
                           if (hit) return emoji(row[0]);
                       }
@@ -944,9 +945,13 @@ jobs:
               }
 
               static InputStream open(String u) throws IOException {
+                  return open(u, UA);
+              }
+
+              static InputStream open(String u, String ua) throws IOException {
                   for (int i = 0; i < 6; i++) {
                       HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
-                      c.setRequestProperty("User-Agent", UA);
+                      c.setRequestProperty("User-Agent", ua);
                       c.setConnectTimeout(20000);
                       c.setReadTimeout(90000);
                       c.setInstanceFollowRedirects(false);
@@ -968,7 +973,11 @@ jobs:
               }
 
               static String readAll(String u) throws IOException {
-                  InputStream in = open(u);
+                  return readAll(u, UA);
+              }
+
+              static String readAll(String u, String ua) throws IOException {
+                  InputStream in = open(u, ua);
                   try {
                       ByteArrayOutputStream out = new ByteArrayOutputStream();
                       byte[] buf = new byte[16384];
@@ -1017,15 +1026,18 @@ jobs:
                   for (String u : UAS) if (!u.equals(UA)) order.add(u);
                   String info = "";
                   for (String ua : order) {
-                      UA = ua;
                       String body;
                       try {
-                          body = readAll(url);
+                          body = readAll(url, ua);
                       } catch (Exception e) {
                           info = String.valueOf(e.getMessage());
                           continue;
                       }
-                      if (body.startsWith("[")) return new JSONArray(body);
+                      if (body.startsWith("[")) {
+                          JSONArray arr = new JSONArray(body);
+                          UA = ua; // نثبت الـUA اللي اشتغل
+                          return arr;
+                      }
                       if (body.contains("\"auth\":0")) throw new Exception("السيرفر رفض الحساب (auth:0)");
                       if (body.equals("{}") || body.isEmpty()) return new JSONArray();
                       info = body.length() > 150 ? body.substring(0, 150) : body;
@@ -1086,7 +1098,11 @@ jobs:
               }
 
               static void loadM3u(String url, List<Channel> out) throws IOException {
-                  BufferedReader r = new BufferedReader(new InputStreamReader(open(fixUrl(url)), "UTF-8"));
+                  loadM3u(url, out, UA);
+              }
+
+              static void loadM3u(String url, List<Channel> out, String ua) throws IOException {
+                  BufferedReader r = new BufferedReader(new InputStreamReader(open(fixUrl(url), ua), "UTF-8"));
                   try {
                       String line;
                       String name = null;
@@ -1096,8 +1112,7 @@ jobs:
                           line = line.replace("﻿", "").trim();
                           if (line.isEmpty()) continue;
                           if (line.startsWith("#EXTINF")) {
-                              int q = line.lastIndexOf('"');
-                              int c = line.indexOf(',', q < 0 ? 0 : q);
+                              int c = nameComma(line);
                               name = c >= 0 ? line.substring(c + 1).trim() : null;
                               group = attr(line, "group-title");
                               logo = attr(line, "tvg-logo");
@@ -1120,6 +1135,17 @@ jobs:
                   }
               }
 
+              // أول فاصلة برا علامات التنصيص = بداية اسم القناة
+              static int nameComma(String line) {
+                  boolean inQuote = false;
+                  for (int i = 0; i < line.length(); i++) {
+                      char ch = line.charAt(i);
+                      if (ch == '"') inQuote = !inQuote;
+                      else if (ch == ',' && !inQuote) return i;
+                  }
+                  return -1;
+              }
+
               static String attr(String line, String key) {
                   String k = key + "=\"";
                   int i = line.indexOf(k);
@@ -1139,11 +1165,11 @@ jobs:
                       String m3u = c[0] + "/get.php?username=" + enc(c[1]) + "&password=" + enc(c[2]) + "&type=m3u_plus&output=ts";
                       String info = String.valueOf(first.getMessage());
                       for (String ua : UAS) {
-                          UA = ua;
                           try {
                               List<Channel> tmp = new ArrayList<>();
-                              loadM3u(m3u, tmp);
+                              loadM3u(m3u, tmp, ua);
                               if (!tmp.isEmpty()) {
+                                  UA = ua;
                                   out.addAll(tmp);
                                   return;
                               }
@@ -1849,9 +1875,7 @@ jobs:
                       return;
                   }
                   rebuildGroupKeys();
-                  String def;
-                  if (section == Data.LIVE) def = favKeys.isEmpty() ? KEY_ALL : KEY_FAV;
-                  else def = groupKeys.contains(KEY_CW) ? KEY_CW : KEY_NEW;
+                  String def = favKeys.isEmpty() ? KEY_ALL : KEY_FAV;
                   lastGroupPos = Math.max(0, groupKeys.indexOf(def));
                   showGroups();
                   list.requestFocus();
@@ -2894,6 +2918,8 @@ jobs:
 
               void savePos() {
                   if (!vod || player == null || Data.current.isEmpty()) return;
+                  // ما نحفظ وهو واقف ينتظر اختيار «أكمل من...»
+                  if (player.getPlaybackState() == Player.STATE_IDLE) return;
                   long d = player.getDuration();
                   long p = player.getCurrentPosition();
                   Channel c = current();
@@ -3884,13 +3910,13 @@ jobs:
         env:
           VERSION_CODE: ${{ github.run_number }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-        run: gradle assembleDebug --no-daemon --stacktrace
+        run: gradle assembleRelease --no-daemon --stacktrace
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          cp p/app/build/outputs/apk/debug/app-debug.apk iptv.apk
+          cp p/app/build/outputs/apk/release/app-release.apk iptv.apk
           gh release create "v${{ github.run_number }}" iptv.apk \
             --repo "$GITHUB_REPOSITORY" \
             --title "IPTV v${{ github.run_number }}" \
