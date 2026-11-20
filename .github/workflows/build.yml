@@ -610,6 +610,7 @@ jobs:
                   }
 
                   static class VH extends RecyclerView.ViewHolder {
+                      Row row;
                       FrameLayout card;
                       ImageView img;
                       TextView emoji, badge, label, play, title;
@@ -703,11 +704,11 @@ jobs:
                       });
                       h.card.setOnClickListener(v -> {
                           int p = fh.getBindingAdapterPosition();
-                          if (p != RecyclerView.NO_POSITION) listener.onCard(row, p);
+                          if (p != RecyclerView.NO_POSITION && fh.row != null) listener.onCard(fh.row, p);
                       });
                       h.card.setOnLongClickListener(v -> {
                           int p = fh.getBindingAdapterPosition();
-                          if (p != RecyclerView.NO_POSITION) listener.onCardLong(row, p);
+                          if (p != RecyclerView.NO_POSITION && fh.row != null) listener.onCardLong(fh.row, p);
                           return true;
                       });
                       return h;
@@ -715,6 +716,7 @@ jobs:
 
                   @Override
                   public void onBindViewHolder(VH h, int pos) {
+                      h.row = row;
                       Channel ch = row.items.get(pos);
                       if (ch.logo != null && !ch.logo.isEmpty()) {
                           h.img.setVisibility(View.VISIBLE);
